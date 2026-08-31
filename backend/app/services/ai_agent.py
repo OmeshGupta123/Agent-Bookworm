@@ -154,16 +154,8 @@ def process_chat_message(
     """
     lower_msg = message.lower()
     cart = list(current_cart or [])
-    
-    # 1. INTENT LOGGING
-    log_ai_action(
-        db=db,
-        action_type="INTENT_DETECTED",
-        ai_reasoning=f"User message: '{message}'. Active cart items: {len(cart)}.",
-        amount_involved=0.0
-    )
 
-    # 2. GRACEFUL FAILURE SCENARIO (Machiavelli 1st Edition Signed)
+    # 1. GRACEFUL FAILURE SCENARIO (Machiavelli 1st Edition Signed)
     if "prince" in lower_msg or "machiavelli" in lower_msg or "1st edition" in lower_msg:
         machiavelli_item = db.query(Product).filter(Product.name.ilike("%Machiavelli%")).first()
         item_stock = machiavelli_item.stock_quantity if machiavelli_item else 0
