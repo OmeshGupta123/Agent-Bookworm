@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, User, Bot, Info, ShoppingCart, Trash2, CreditCard, ArrowRight, X } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { sendChatMessage } from '../api';
 import CheckoutCard from './CheckoutCard';
 
@@ -146,7 +147,9 @@ export default function BuyerChatView({ products }) {
   };
 
   const handleRemoveCartItem = (bookName) => {
-    handleSend(`Remove ${bookName} from my cart`);
+    if (!bookName) return;
+    setIsCartOpen(false);
+    handleSend(`remove ${bookName}`);
   };
 
   const cartTotal = cart.reduce((sum, item) => sum + (item.final_price || 0), 0);
@@ -196,7 +199,20 @@ export default function BuyerChatView({ products }) {
                       : 'bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-tl-none'
                   }`}
                 >
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                  {/* Clean Formatted Markdown Rendering */}
+                  <div className="prose prose-invert prose-xs max-w-none text-zinc-100 font-sans">
+                    <ReactMarkdown
+                      components={{
+                        p: ({ node, ...props }) => <p className="mb-1.5 last:mb-0 leading-relaxed" {...props} />,
+                        strong: ({ node, ...props }) => <strong className="font-semibold text-white" {...props} />,
+                        em: ({ node, ...props }) => <em className="italic text-zinc-200" {...props} />,
+                        ul: ({ node, ...props }) => <ul className="list-disc pl-4 space-y-1 my-1.5" {...props} />,
+                        li: ({ node, ...props }) => <li className="text-zinc-200" {...props} />
+                      }}
+                    >
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
 
                   {msg.actionType === 'GRACEFUL_FAILURE' && (
                     <div className="mt-2 text-xs bg-zinc-950 text-amber-400 p-2 rounded-lg border border-amber-900/50 flex items-center gap-1.5">
@@ -279,6 +295,7 @@ export default function BuyerChatView({ products }) {
                 <span>Your Shopping Cart ({cart.length})</span>
               </div>
               <button
+                type="button"
                 onClick={() => setIsCartOpen(false)}
                 className="text-zinc-400 hover:text-white p-1 rounded-md hover:bg-zinc-800 transition-colors"
               >
@@ -306,7 +323,11 @@ export default function BuyerChatView({ products }) {
                       </div>
 
                       <button
-                        onClick={() => handleRemoveCartItem(item.name)}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveCartItem(item.name);
+                        }}
                         title="Remove item"
                         className="p-1 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 rounded transition-colors cursor-pointer shrink-0 mt-0.5"
                       >
@@ -322,6 +343,7 @@ export default function BuyerChatView({ products }) {
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => handleSend("checkout now")}
                   className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl transition-colors flex items-center justify-center space-x-1.5 shadow-md cursor-pointer"
                 >

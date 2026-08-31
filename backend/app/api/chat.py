@@ -14,9 +14,23 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     """
     POST /api/chat
     Takes user message, conversation history, and current shopping cart.
+    Enforces Pre-LLM >150 word count token-saver guardrail before invoking AI agent.
     Evaluates intent, manages stateful cart (add/remove), enforces <=15% discount gating,
     and returns conversational reply, updated cart state, and dynamic suggested actions.
     """
+    # 1. Pre-LLM Token Saver Guardrail: Check message word count
+    words = (req.message or "").split()
+    if len(words) > 150:
+        logger.info(f"Pre-LLM Guardrail triggered: Message length {len(words)} > 150 words.")
+        return ChatResponse(
+            reply="Your message is a bit too long! To help me assist you quickly, please keep your requests under 150 words.",
+            action_type="MESSAGE_TOO_LONG",
+            checkout_widget=None,
+            conversation_history=req.conversation_history or [],
+            cart=req.cart or [],
+            suggested_actions=[]
+        )
+
     try:
         reply_text, action_type, widget_data, updated_cart, suggested_actions = process_chat_message(
             db=db,

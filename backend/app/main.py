@@ -1,8 +1,10 @@
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
-from app.database import engine, Base, SessionLocal
+from sqlalchemy.orm import Session
+from app.database import engine, Base, SessionLocal, get_db
+from app.models import Product
 from app.api import products, orders, audit, chat
 from app.api.products import seed_products
 
@@ -66,4 +68,40 @@ def root():
         "status": "online",
         "track": "AI Growth & Agentic Commerce (Razorpay Buildathon)",
         "max_discount_cap": "15%"
+    }
+
+@app.get("/api/agent-catalog.json")
+def get_agent_catalog(db: Session = Depends(get_db)):
+    """
+    Standalone Agent-to-Agent Commerce Endpoint.
+    Returns a minified, agent-readable JSON schema of all products in the database.
+    """
+    products = db.query(Product).all()
+    if not products:
+        seed_products(db)
+        products = db.query(Product).all()
+
+    catalog_data = [
+        {
+            "id": p.id,
+            "title": p.name,
+            "author": p.author,
+            "genre": p.genre,
+            "format": p.format,
+            "price": float(p.price),
+            "currency": "INR",
+            "stock_quantity": p.stock_quantity,
+            "checkout_capability": True,
+            "description": p.description
+        }
+        for p in products
+    ]
+
+    return {
+        "store_name": "AgenticPay Bookstore",
+        "protocol": "Agent-to-Agent Commerce v1.0",
+        "checkout_capability": True,
+        "bounded_discount_cap": "15%",
+        "total_products": len(catalog_data),
+        "catalog": catalog_data
     }
