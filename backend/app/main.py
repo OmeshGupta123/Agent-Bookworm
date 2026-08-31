@@ -22,7 +22,7 @@ except Exception as e:
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="AgenticPay API",
+    title="Agent Bookworm API",
     description="Agentic Commerce Backend with Bounded Discounts, Razorpay Checkouts, Audit Logs, and Graceful Inventory Handling.",
     version="1.0.0"
 )
@@ -52,7 +52,7 @@ app.include_router(audit.router)
 
 @app.on_event("startup")
 def startup_event():
-    logger.info("Initializing AgenticPay database tables and seeding catalog...")
+    logger.info("Initializing Agent Bookworm database tables and seeding catalog...")
     db = SessionLocal()
     try:
         seed_products(db)
@@ -64,7 +64,7 @@ def startup_event():
 @app.get("/")
 def root():
     return {
-        "app": "AgenticPay API",
+        "app": "Agent Bookworm API",
         "status": "online",
         "track": "AI Growth & Agentic Commerce (Razorpay Buildathon)",
         "max_discount_cap": "15%"
@@ -98,7 +98,7 @@ def get_agent_catalog(db: Session = Depends(get_db)):
     ]
 
     return {
-        "store_name": "AgenticPay Bookstore",
+        "store_name": "Agent Bookworm Bookstore",
         "protocol": "Agent-to-Agent Commerce v1.0",
         "checkout_capability": True,
         "bounded_discount_cap": "15%",

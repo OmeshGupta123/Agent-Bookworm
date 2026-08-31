@@ -44,7 +44,7 @@ export default function BuyerChatView({ products }) {
     {
       id: 'init-1',
       role: 'assistant',
-      content: "Hello! Welcome to AgenticPay Bookstore. I am your AI Commerce Assistant for our 200-book collection. I can negotiate bounded discounts (up to 15%), recommend companion reads, manage your shopping cart, and generate instant Razorpay checkouts directly in this chat. How can I help you today?",
+      content: "Hello! Welcome to Agent Bookworm Bookstore. I am your AI Commerce Assistant for our 200-book collection. I can negotiate bounded discounts (up to 15%), recommend companion reads, manage your shopping cart, and generate instant Razorpay checkouts directly in this chat. How can I help you today?",
       actionType: null,
       widget: null,
       suggestedActions: ["Recommend 3 good Self-Growth books."]
@@ -159,7 +159,7 @@ export default function BuyerChatView({ products }) {
       {/* Top Header Banner */}
       <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3 mb-3 text-xs text-zinc-400">
         <div className="flex items-center space-x-2">
-          <span className="font-semibold text-white">AgenticPay Bookstore</span>
+          <span className="font-semibold text-white">Agent Bookworm Bookstore</span>
           <span className="text-zinc-500">•</span>
           <span className="text-zinc-400">AI Commerce Assistant</span>
         </div>

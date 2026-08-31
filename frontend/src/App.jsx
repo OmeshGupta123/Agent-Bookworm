@@ -22,7 +22,7 @@ export default function App() {
           {/* Small Project Title */}
           <div className="flex items-center space-x-2">
             <span className="text-base font-bold text-white tracking-tight">
-              AgenticPay
+              Agent Bookworm
             </span>
           </div>
 
@@ -66,7 +66,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="border-t border-zinc-900 py-2.5 text-center text-xs text-zinc-600 bg-zinc-950">
-        AgenticPay — AI Commerce with Bounded Gating & Audit Trail
+        Agent Bookworm — AI Commerce with Bounded Gating & Audit Trail
       </footer>
     </div>
   );

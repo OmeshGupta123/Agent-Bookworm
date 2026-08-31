@@ -76,7 +76,7 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
       key: razorpay_key_id || 'rzp_test_TV4evSxVgchq96',
       amount: Math.round(calculatedFinalAmount * 100),
       currency: currency || 'INR',
-      name: 'AgenticPay Bookstore',
+      name: 'Agent Bookworm Bookstore',
       description: `Checkout for ${cartItemList.length} book(s)`,
       image: 'https://cdn-icons-png.flaticon.com/512/891/891462.png',
       order_id: razorpay_order_id,
@@ -103,7 +103,7 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
       },
       prefill: {
         name: 'Razorpay Buyer',
-        email: 'buyer@agenticpay.ai',
+        email: 'buyer@agentbookworm.ai',
         contact: '9999999999'
       },
       theme: {

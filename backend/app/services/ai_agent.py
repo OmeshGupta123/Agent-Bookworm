@@ -775,7 +775,7 @@ def process_chat_message(
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
             prompt = (
-                "You are AgenticPay, an AI assistant for an Agentic Bookstore with a 200-book catalog.\n"
+                "You are Agent Bookworm, an AI assistant for an Agentic Bookstore with a 200-book catalog.\n"
                 "STRICT BOUNDED RULES:\n"
                 "1. Continuous Cross-Sell / Upsell Rule: Whenever you successfully execute add_to_cart, you MUST immediately execute a cross-sell strategy. Look at the book just added, find 1 highly relevant complementary book in the catalog, and pitch it in 1-2 sentences. You MUST include a dynamic action chip to add this complementary book to the cart.\n"
                 "2. If a user asks for general recommendations, a specific vibe/genre, or asks for multiple books (e.g. 'Recommend 3 Self-Growth books'), you MUST call search_catalog_by_theme tool and output a pitch for EVERY book returned by the tool, not just the first one. Include action chips for each book.\n"
@@ -797,7 +797,7 @@ def process_chat_message(
 
     # Default fallback
     return (
-        "Welcome to AgenticPay Bookstore! How can I help you with your book search today?",
+        "Welcome to Agent Bookworm Bookstore! How can I help you with your book search today?",
         None,
         None,
         cart,

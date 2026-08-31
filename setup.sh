@@ -2,7 +2,7 @@
 set -e
 
 echo "==================================================="
-echo "  Starting AgenticPay Setup (Razorpay Buildathon)"
+echo "  Starting Agent Bookworm Setup (Razorpay Buildathon)"
 echo "==================================================="
 
 echo "[1/4] Installing Python backend requirements..."

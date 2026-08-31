@@ -1,6 +1,6 @@
 @echo off
 echo ===================================================
-echo   Starting AgenticPay Setup (Razorpay Buildathon)
+echo   Starting Agent Bookworm Setup (Razorpay Buildathon)
 echo ===================================================
 
 echo [1/4] Installing Python backend requirements...
@@ -26,7 +26,7 @@ echo FastAPI API:  http://127.0.0.1:8000
 echo React App:    http://localhost:5173
 echo ===================================================
 
-start "AgenticPay FastAPI Backend" cmd /k "cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
-start "AgenticPay React Frontend" cmd /k "cd frontend && npx vite --host 127.0.0.1 --port 5173"
+start "Agent Bookworm FastAPI Backend" cmd /k "cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
+start "Agent Bookworm React Frontend" cmd /k "cd frontend && npx vite --host 127.0.0.1 --port 5173"
 
-echo AgenticPay services are launching in separate windows!
+echo Agent Bookworm services are launching in separate windows!
