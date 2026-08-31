@@ -67,6 +67,7 @@ class ChatResponse(BaseModel):
     checkout_widget: Optional[CheckoutWidgetData] = None
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)
     cart: List[Dict[str, Any]] = Field(default_factory=list)
+    suggested_actions: List[str] = Field(default_factory=list)
 
 class VerifyPaymentRequest(BaseModel):
     razorpay_order_id: str

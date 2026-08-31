@@ -15,10 +15,10 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     POST /api/chat
     Takes user message, conversation history, and current shopping cart.
     Evaluates intent, manages stateful cart (add/remove), enforces <=15% discount gating,
-    and triggers checkout widget only on explicit user request.
+    and returns conversational reply, updated cart state, and dynamic suggested actions.
     """
     try:
-        reply_text, action_type, widget_data, updated_cart = process_chat_message(
+        reply_text, action_type, widget_data, updated_cart, suggested_actions = process_chat_message(
             db=db,
             message=req.message,
             conversation_history=req.conversation_history,
@@ -36,7 +36,8 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
             action_type=action_type,
             checkout_widget=widget_data,
             conversation_history=updated_history,
-            cart=updated_cart
+            cart=updated_cart,
+            suggested_actions=suggested_actions or []
         )
     except Exception as e:
         logger.error(f"Chat processing error: {e}", exc_info=True)

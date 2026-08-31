@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, RefreshCw, ChevronDown, ChevronUp, DollarSign, Lock, AlertTriangle, Eye, Layers, ShoppingBag } from 'lucide-react';
+import { ShieldCheck, RefreshCw, ChevronDown, ChevronUp, Lock, AlertTriangle, Eye, Layers, ShoppingBag } from 'lucide-react';
 import { fetchAuditLogs } from '../api';
 
 const NAVIGATION_SECTIONS = [
@@ -139,7 +139,7 @@ export default function MerchantDashboardView() {
             {/* KPI 2: Total Cart Volume */}
             <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl">
               <span className="text-[11px] font-medium text-zinc-400 block">Total Cart Volume</span>
-              <p className="text-2xl font-bold text-white mt-1">${totalCartVolume.toFixed(2)}</p>
+              <p className="text-2xl font-bold text-white mt-1">₹{totalCartVolume.toFixed(2)}</p>
               <span className="text-[10px] text-zinc-500">Verified & Generated</span>
             </div>
 
@@ -204,7 +204,7 @@ export default function MerchantDashboardView() {
 
                         <div className="flex items-center space-x-3 shrink-0">
                           <span className="font-semibold text-white">
-                            {log.amount_involved > 0 ? `$${log.amount_involved.toFixed(2)}` : '—'}
+                            {log.amount_involved > 0 ? `₹${log.amount_involved.toFixed(2)}` : '—'}
                           </span>
                           <button
                             onClick={(e) => {
@@ -249,7 +249,7 @@ export default function MerchantDashboardView() {
                             </div>
                             <div className="bg-zinc-900 p-2 rounded border border-zinc-800">
                               <span className="text-zinc-500 block">Amount Involved:</span>
-                              <span className="text-blue-400 font-semibold">${log.amount_involved.toFixed(2)}</span>
+                              <span className="text-blue-400 font-semibold">₹{log.amount_involved.toFixed(2)}</span>
                             </div>
                             <div className="bg-zinc-900 p-2 rounded border border-zinc-800">
                               <span className="text-zinc-500 block">Rule Status:</span>

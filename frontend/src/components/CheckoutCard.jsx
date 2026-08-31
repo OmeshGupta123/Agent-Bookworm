@@ -83,7 +83,6 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
 
       handler: async function (response) {
         try {
-          // Send success payload to POST /api/orders/verify
           const verifyRes = await verifyPayment(
             response.razorpay_order_id,
             response.razorpay_payment_id,
@@ -181,7 +180,7 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
             </div>
 
             <div className="text-right shrink-0 ml-3">
-              <div className="font-semibold text-white">${(item.final_price || item.price).toFixed(2)}</div>
+              <div className="font-semibold text-white">₹{(item.final_price || item.price).toFixed(2)}</div>
               {item.discount_percentage > 0 && (
                 <div className="text-[10px] text-blue-400 font-medium">{item.discount_percentage}% OFF</div>
               )}
@@ -195,18 +194,18 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
         {original_total > 0 && original_total !== calculatedFinalAmount && (
           <div className="flex justify-between text-zinc-500">
             <span>Subtotal:</span>
-            <span className="line-through">${original_total.toFixed(2)}</span>
+            <span className="line-through">₹{original_total.toFixed(2)}</span>
           </div>
         )}
         {total_discount > 0 && (
           <div className="flex justify-between text-blue-400 font-medium">
             <span>Bounded Discount Savings:</span>
-            <span>-${total_discount.toFixed(2)}</span>
+            <span>-₹{total_discount.toFixed(2)}</span>
           </div>
         )}
         <div className="flex justify-between text-sm font-semibold text-white pt-2 border-t border-zinc-800">
           <span>Total Payable Amount</span>
-          <span className="text-blue-400 font-bold text-base">${calculatedFinalAmount.toFixed(2)}</span>
+          <span className="text-blue-400 font-bold text-base">₹{calculatedFinalAmount.toFixed(2)}</span>
         </div>
       </div>
 
@@ -235,7 +234,7 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
             ) : (
               <>
                 <CreditCard className="w-4 h-4" />
-                <span>Pay ${calculatedFinalAmount.toFixed(2)} with Razorpay</span>
+                <span>Pay ₹{calculatedFinalAmount.toFixed(2)} with Razorpay</span>
               </>
             )}
           </button>
