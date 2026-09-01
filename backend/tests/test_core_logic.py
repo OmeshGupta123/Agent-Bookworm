@@ -216,7 +216,6 @@ def test_no_duplicate_cross_sell_companion():
     finally:
         db.close()
 
-
 # 8. Graceful Failure & Recovery Test
 def test_graceful_failure_out_of_stock_pivot():
     """Verify that requesting an out-of-stock item triggers a graceful pivot rather than a system crash."""
@@ -240,5 +239,48 @@ def test_graceful_failure_out_of_stock_pivot():
         # Assert it actively pitches an alternative to save the sale
         assert len(actions) > 0
         assert any("Add" in action and "Cart" in action for action in actions)
+    finally:
+        db.close()
+
+# 9. Dynamic Discount Negotiation Engine Test
+def test_dynamic_discount_negotiation_engine():
+    """Verify dynamic percentage parsing, book resolution, 15% capping, and prompt for missing book."""
+    from app.database import SessionLocal
+    from app.services.ai_agent import process_chat_message
+
+    db = SessionLocal()
+    try:
+        # Test 1: Exceeding 15% cap (30%)
+        reply1, action_type1, widget1, cart1, actions1 = process_chat_message(
+            db=db,
+            message="Can I get a 30% discount on Atomic Habits?",
+            conversation_history=[],
+            current_cart=[]
+        )
+        assert action_type1 == "CART_UPDATED"
+        assert len(cart1) == 1
+        assert cart1[0]["name"] == "Atomic Habits"
+        assert cart1[0]["discount_percentage"] == 15.0  # Capped at 15%
+
+        # Test 2: Valid discount (10%)
+        reply2, action_type2, widget2, cart2, actions2 = process_chat_message(
+            db=db,
+            message="Can I get 10% off Deep Work?",
+            conversation_history=[],
+            current_cart=[]
+        )
+        assert action_type2 == "CART_UPDATED"
+        assert len(cart2) == 1
+        assert cart2[0]["name"] == "Deep Work"
+        assert cart2[0]["discount_percentage"] == 10.0
+
+        # Test 3: Discount query without specifying a book
+        reply3, action_type3, widget3, cart3, actions3 = process_chat_message(
+            db=db,
+            message="Can I get a discount please?",
+            conversation_history=[],
+            current_cart=[]
+        )
+        assert "Which book" in reply3 or "specify" in reply3.lower()
     finally:
         db.close()

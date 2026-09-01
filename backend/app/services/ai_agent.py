@@ -95,8 +95,11 @@ def find_product_fuzzy(db: Session, query_str: str) -> Optional[Product]:
 
     clean_query = query_str.lower().strip()
 
+    # Strip percentage numbers (e.g. "30%", "20 percent") and discount action words to isolate product title
+    clean_query = re.sub(r'\b\d+\s*(?:%|percent)?\b', '', clean_query).strip()
+
     # Strip action and padding words to isolate product title
-    for pad in ["remove", "delete", "add", "buy", "purchase", "get", "replace", "swap", "with", "for", "to", "and", "cart", "from", "the", "book", "books", "copy", "please", "some", "show", "me", "find"]:
+    for pad in ["remove", "delete", "add", "buy", "purchase", "get", "replace", "swap", "with", "for", "to", "and", "cart", "from", "the", "book", "books", "copy", "please", "some", "show", "me", "find", "discount", "discounts", "can", "give", "price", "is", "high", "percent", "off", "deal", "on"]:
         clean_query = re.sub(rf'\b{pad}\b', '', clean_query).strip()
 
     if not clean_query or len(clean_query) < 2:
@@ -389,7 +392,9 @@ def process_chat_message(
             actions.append("Proceed to Checkout")
         return actions
 
-    has_buy_intent = any(k in lower_msg for k in ["buy", "add", "purchase", "get", "order", "want to buy", "discount on"])
+    is_discount_query = any(k in lower_msg for k in ["discount", "deal", "cheaper", "lower price", "price is high", "price high", "reduce price", "off"]) or bool(re.search(r'(\d+)\s*(?:%|percent)', lower_msg))
+
+    has_buy_intent = (not is_discount_query) and any(k in lower_msg for k in ["buy", "add", "purchase", "get", "order", "want to buy"])
     has_remove_intent = any(k in lower_msg for k in ["remove", "delete", "only want", "dont want", "don't want"])
     has_swap_intent = any(k in lower_msg for k in ["replace", "swap", "exchange", "change", "trade"])
 
@@ -702,42 +707,76 @@ def process_chat_message(
                 reply = "I couldn't find that item in your current cart."
                 return (reply, None, None, cart, build_actions())
 
-    # 10. HARD GATING TEST SCENARIO: DISCOUNT > 15% REQUESTED
-    if "20%" in lower_msg or "20 percent" in lower_msg or "30%" in lower_msg or "25%" in lower_msg:
-        target_book = find_product_fuzzy(db, lower_msg) or db.query(Product).filter(Product.name.ilike("%Atomic Habits%")).first()
-        base_price = target_book.price if target_book else 16.99
-        book_name = target_book.name if target_book else "Atomic Habits"
-        requested_num = 20.0
+    # 10. DYNAMIC DISCOUNT NEGOTIATION ENGINE & HARD GATING ENFORCEMENT
+    has_discount_intent = any(k in lower_msg for k in ["discount", "deal", "cheaper", "lower price", "price is high", "price high", "reduce price", "off"]) or bool(re.search(r'(\d+)\s*(?:%|percent)', lower_msg))
+
+    if has_discount_intent and not has_remove_intent and not has_swap_intent:
+        target_book = find_product_fuzzy(db, lower_msg)
         
-        log_ai_action(
-            db=db,
-            action_type="CHECKOUT_BLOCKED",
-            ai_reasoning=(
-                f"HARD GATING ENFORCED: User requested a {requested_num}% discount on '{book_name}'. "
-                f"Merchant hard-cap rule forbids discounts exceeding {MAX_DISCOUNT_PERCENT}%. "
-                f"Decision: Reject {requested_num}% request, enforce maximum capped discount of {MAX_DISCOUNT_PERCENT}%."
-            ),
-            amount_involved=0.0
-        )
-        
-        if target_book:
+        if not target_book:
+            reply = "Which book would you like a discount on? Please specify the book title from our catalog and I'll be happy to apply an eligible discount for you!"
+            return (reply, None, None, cart, build_actions())
+
+        # Extract requested percentage
+        pct_match = re.search(r'(\d+)\s*(?:%|percent)', lower_msg)
+        if pct_match:
+            requested_num = float(pct_match.group(1))
+        else:
+            requested_num = 10.0  # Default discount when user asks generally for a discount
+
+        if requested_num > MAX_DISCOUNT_PERCENT:
+            log_ai_action(
+                db=db,
+                action_type="CHECKOUT_BLOCKED",
+                ai_reasoning=(
+                    f"HARD GATING ENFORCED: User requested a {requested_num:.0f}% discount on '{target_book.name}'. "
+                    f"Merchant hard-cap rule forbids discounts exceeding {MAX_DISCOUNT_PERCENT}%. "
+                    f"Decision: Reject {requested_num:.0f}% request, enforce maximum capped discount of {MAX_DISCOUNT_PERCENT}%."
+                ),
+                amount_involved=0.0,
+                log_metadata={
+                    "status": "Blocked",
+                    "purchased_items": [target_book.name],
+                    "failure_reason": f"Requested discount ({requested_num:.0f}%) exceeds maximum allowed cap of {MAX_DISCOUNT_PERCENT}%."
+                }
+            )
+
             cart = add_to_cart(cart, target_book, discount_pct=MAX_DISCOUNT_PERCENT)
             log_ai_action(
                 db=db,
                 action_type="ITEM_ADDED_TO_CART",
                 ai_reasoning=f"PHYSICAL TOOL EXECUTED: Added '{target_book.name}' to cart at capped {MAX_DISCOUNT_PERCENT}% discount.",
-                amount_involved=round(target_book.price * 0.85, 2)
+                amount_involved=round(target_book.price * (1 - MAX_DISCOUNT_PERCENT / 100.0), 2)
             )
 
-        companion = find_cross_sell_companion(db, target_book, cart) if target_book else None
-        extra_chip = [f"Add {companion.name} to Cart"] if companion else ["Add Deep Work to Cart"]
+            companion = find_cross_sell_companion(db, target_book, cart)
+            extra_chip = [f"Add {companion.name} to Cart"] if companion else []
+            cross_sell_text = f"\n\n**Recommended Companion Read:** Since you added **{target_book.name}**, I highly recommend pairing it with **{companion.name}** by {companion.author} (₹{companion.price:.2f})!" if companion else ""
 
-        reply = (
-            f"Our merchant system strictly caps maximum discounts at {MAX_DISCOUNT_PERCENT}%, so I cannot apply a 20% discount. "
-            f"However, I have added **{book_name}** to your cart with our maximum allowed **{MAX_DISCOUNT_PERCENT}% discount**!\n\n"
-            f"**Atomic Habits by James Clear** is a masterpiece on behavioral psychology that reveals how tiny 1% daily changes accumulate into massive life transformations over time."
-        )
-        return (reply, "CART_UPDATED", None, cart, build_actions(extra_chip))
+            reply = (
+                f"Our merchant system strictly caps maximum discounts at **{MAX_DISCOUNT_PERCENT:.0f}%**, so I cannot apply a {requested_num:.0f}% discount. "
+                f"However, I have added **{target_book.name}** to your cart with our maximum allowed **{MAX_DISCOUNT_PERCENT:.0f}% discount**!\n\n"
+                f"**About {target_book.name}:** {target_book.description}{cross_sell_text}"
+            )
+            return (reply, "CART_UPDATED", None, cart, build_actions(extra_chip))
+        else:
+            cart = add_to_cart(cart, target_book, discount_pct=requested_num)
+            log_ai_action(
+                db=db,
+                action_type="ITEM_ADDED_TO_CART",
+                ai_reasoning=f"PHYSICAL TOOL EXECUTED: Added '{target_book.name}' to cart at requested {requested_num:.0f}% discount.",
+                amount_involved=round(target_book.price * (1 - requested_num / 100.0), 2)
+            )
+
+            companion = find_cross_sell_companion(db, target_book, cart)
+            extra_chip = [f"Add {companion.name} to Cart"] if companion else []
+            cross_sell_text = f"\n\n**Recommended Companion Read:** Since you added **{target_book.name}**, I highly recommend pairing it with **{companion.name}** by {companion.author} (₹{companion.price:.2f})!" if companion else ""
+
+            reply = (
+                f"Great news! I have applied your **{requested_num:.0f}% discount** and added **{target_book.name}** to your cart!\n\n"
+                f"**About {target_book.name}:** {target_book.description}{cross_sell_text}"
+            )
+            return (reply, "CART_UPDATED", None, cart, build_actions(extra_chip))
 
     # 11. EXPLICIT CHECKOUT CONFIRMATION -> INVOKE generate_checkout TOOL
     if "checkout" in lower_msg or "pay" in lower_msg or "buy now" in lower_msg or "ready to order" in lower_msg or "generate checkout" in lower_msg:
