@@ -215,3 +215,30 @@ def test_no_duplicate_cross_sell_companion():
             assert companion.name not in [item["name"] for item in cart]
     finally:
         db.close()
+
+
+# 8. Graceful Failure & Recovery Test
+def test_graceful_failure_out_of_stock_pivot():
+    """Verify that requesting an out-of-stock item triggers a graceful pivot rather than a system crash."""
+    from app.database import SessionLocal
+    from app.services.ai_agent import process_chat_message
+
+    db = SessionLocal()
+    try:
+        # User requests an explicitly out-of-stock or unsupported genre/book
+        reply, action_type, widget, updated_cart, actions = process_chat_message(
+            db=db,
+            message="I want to buy The Prince Machiavelli 1st Edition Signed",
+            conversation_history=[],
+            current_cart=[]
+        )
+
+        # Assert the system gracefully recovers instead of failing
+        assert action_type == "GRACEFUL_FAILURE"
+        assert "apologize" in reply.lower() or "out of stock" in reply.lower()
+        
+        # Assert it actively pitches an alternative to save the sale
+        assert len(actions) > 0
+        assert any("Add" in action and "Cart" in action for action in actions)
+    finally:
+        db.close()
