@@ -259,31 +259,48 @@ def remove_from_cart(cart: List[Dict[str, Any]], identifier: str) -> Tuple[List[
 def find_cross_sell_companion(db: Session, added_product: Product, cart: List[Dict[str, Any]]) -> Optional[Product]:
     """
     Finds 1 highly relevant complementary book for the continuous cross-sell engine.
-    Ensures the companion is not already present in the cart.
+    STRICT RULE: Never returns added_product and never returns a book already present in the user's cart.
     """
-    comp_query = "%Deep Work%" if "atomic" in added_product.name.lower() else ("%Atomic Habits%" if "deep" in added_product.name.lower() or "power" in added_product.name.lower() else f"%{added_product.genre}%")
-    
-    companion = db.query(Product).filter(
-        Product.name.ilike(comp_query),
-        Product.id != added_product.id,
-        Product.stock_quantity > 0
-    ).first()
+    cart_product_ids = {item.get("product_id") for item in cart if item.get("product_id")}
+    cart_product_names = [item.get("name", "").lower().strip() for item in cart if item.get("name")]
+    added_name_lower = added_product.name.lower().strip()
 
-    if not companion:
-        companion = db.query(Product).filter(
-            Product.genre == added_product.genre,
-            Product.id != added_product.id,
-            Product.stock_quantity > 0
-        ).first()
+    def is_eligible(p: Product) -> bool:
+        if not p or p.id == added_product.id or p.stock_quantity <= 0:
+            return False
+        if p.id in cart_product_ids:
+            return False
+        p_name_lower = p.name.lower().strip()
+        if p_name_lower in added_name_lower or added_name_lower in p_name_lower:
+            return False
+        if any(cn in p_name_lower or p_name_lower in cn for cn in cart_product_names):
+            return False
+        return True
 
-    if not companion:
-        companion = db.query(Product).filter(
-            Product.id != added_product.id,
-            Product.stock_quantity > 0
-        ).first()
+    # 1. Primary cross-sell pair lookup
+    if "atomic" in added_name_lower:
+        comp_candidates = db.query(Product).filter(Product.name.ilike("%Deep Work%")).all()
+    elif "deep" in added_name_lower or "power" in added_name_lower:
+        comp_candidates = db.query(Product).filter(Product.name.ilike("%Atomic Habits%")).all()
+    else:
+        comp_candidates = db.query(Product).filter(Product.genre == added_product.genre).all()
 
-    if companion and not is_in_cart(cart, companion.name):
-        return companion
+    for p in comp_candidates:
+        if is_eligible(p):
+            return p
+
+    # 2. Genre candidates lookup
+    genre_candidates = db.query(Product).filter(Product.genre == added_product.genre).all()
+    for p in genre_candidates:
+        if is_eligible(p):
+            return p
+
+    # 3. Overall catalog fallback lookup
+    all_candidates = db.query(Product).filter(Product.stock_quantity > 0).all()
+    for p in all_candidates:
+        if is_eligible(p):
+            return p
+
     return None
 
 def generate_checkout(cart: List[Dict[str, Any]], db: Session) -> Tuple[str, str, Dict[str, Any], List[Dict[str, Any]], List[str]]:
@@ -322,17 +339,7 @@ def generate_checkout(cart: List[Dict[str, Any]], db: Session) -> Tuple[str, str
     db.commit()
     db.refresh(db_order)
 
-    log_ai_action(
-        db=db,
-        order_id=db_order.id,
-        action_type="CHECKOUT_GENERATED",
-        ai_reasoning=(
-            f"CHECKOUT TOOL EXECUTED: Created Razorpay order '{rzp_order_id}' for {len(cart)} cart items. "
-            f"Original total: ₹{original_total:.2f}, Savings: ₹{total_discount:.2f} ({avg_discount_pct}% avg discount), "
-            f"Final payable amount: ₹{final_amount:.2f}."
-        ),
-        amount_involved=final_amount
-    )
+    # Order created in database for checkout widget (auditing handled upon verified/failed payment)
 
     widget_data = {
         "order_id": db_order.id,
@@ -361,7 +368,7 @@ def process_chat_message(
 ) -> Tuple[str, Optional[str], Optional[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
     """
     Stateful Agentic Bookstore process function.
-    Handles Continuous Upsell Engine, Empathetic Problem Solving, Budget Curation, search_catalog_by_theme, Graceful Pivots, and Stateful Cart Tools.
+    Handles Conversational Memory & Affirmations (yes/sure/do it), Continuous Upsell Engine, Empathetic Problem Solving, Budget Curation, search_catalog_by_theme, Graceful Pivots, and Stateful Cart Tools.
     """
     lower_msg = message.lower().strip()
     cart = list(current_cart or [])
@@ -386,7 +393,47 @@ def process_chat_message(
     has_remove_intent = any(k in lower_msg for k in ["remove", "delete", "only want", "dont want", "don't want"])
     has_swap_intent = any(k in lower_msg for k in ["replace", "swap", "exchange", "change", "trade"])
 
-    # 1. EMPATHETIC PROBLEM SOLVING & SEMANTIC PIVOTS (Handling "I am poor", "I am sad", "I want to get rich", "stressed")
+    # 1. CONVERSATIONAL MEMORY & AFFIRMATION FOLLOW-UPS ("yes", "sure", "add them", "do it", "ok", "add bundle", "add all")
+    affirmative_terms = ["yes", "sure", "add them", "add it", "do it", "ok", "okay", "add all", "add both", "please add", "add bundle", "add recommended", "yep", "yeah"]
+    is_affirmative = any(term in lower_msg for term in affirmative_terms) or (len(lower_msg.split()) <= 3 and any(w in lower_msg for w in ["yes", "sure", "ok", "yep", "yeah"]))
+
+    if is_affirmative and not has_remove_intent and not has_swap_intent:
+        last_assistant_msg = ""
+        if conversation_history:
+            for msg_obj in reversed(conversation_history):
+                if msg_obj.get("role") == "assistant" and msg_obj.get("content"):
+                    last_assistant_msg = msg_obj.get("content")
+                    break
+
+        if last_assistant_msg:
+            # Extract bolded titles **Book Title** from last assistant turn
+            bold_titles = re.findall(r'\*\*([^*]+)\*\*', last_assistant_msg)
+            ignored_headers = {"budget curator", "5-book discovery pitch", "total bundle price:", "why atomic habits is a great read:", "recommended companion read:", "about atomic habits:"}
+            
+            added_prods = []
+            for bt in bold_titles:
+                clean_bt = bt.strip()
+                if clean_bt.lower() in ignored_headers or clean_bt.startswith("₹") or clean_bt.isdigit():
+                    continue
+                p = find_product_fuzzy(db, clean_bt) or db.query(Product).filter(Product.name.ilike(f"%{clean_bt}%")).first()
+                if p and p not in added_prods and not is_in_cart(cart, p.name):
+                    added_prods.append(p)
+
+            if added_prods:
+                for p in added_prods:
+                    cart = add_to_cart(cart, p, discount_pct=10.0)
+                    log_ai_action(
+                        db=db,
+                        action_type="ITEM_ADDED_TO_CART",
+                        ai_reasoning=f"CONVERSATIONAL MEMORY EXECUTED: Added '{p.name}' to cart following user affirmation ('{message}').",
+                        amount_involved=round(p.price * 0.9, 2)
+                    )
+
+                added_names = [f"**{p.name}**" for p in added_prods]
+                reply = f"Awesome! I've added {', '.join(added_names)} to your cart with a 10% discount!"
+                return (reply, "CART_UPDATED", None, cart, build_actions())
+
+    # 2. EMPATHETIC PROBLEM SOLVING & SEMANTIC PIVOTS (Handling "I am poor", "I am sad", "I want to get rich", "stressed")
     matched_emotion = next((k for k in EMOTIONAL_PROBLEM_MAP if k in lower_msg), None)
     if matched_emotion and not has_buy_intent and not has_remove_intent and not has_swap_intent:
         genre_label, emp_opening, book_hints = EMOTIONAL_PROBLEM_MAP[matched_emotion]
@@ -407,10 +454,10 @@ def process_chat_message(
             + "\n\n".join(b_lines)
             + "\n\nWhich of these would you like to explore or add to your cart to get started?"
         )
-        extra_chips = [f"Add {b.name} to Cart" for b in consult_books[:3]]
+        extra_chips = ["Add Bundle to Cart"] + [f"Add {b.name} to Cart" for b in consult_books[:3]]
         return (reply, None, None, cart, build_actions(extra_chips))
 
-    # 2. BUDGET CURATOR FLOW (Parsing ₹200, 200 rs, budget of 200, under ₹500, etc.)
+    # 3. BUDGET CURATOR FLOW (Parsing ₹200, 200 rs, budget of 200, under ₹500, etc.)
     budget_match = re.search(r'(?:budget|under|below|within|price of|rs\.?|rupees?|₹)\s*(\d+(?:\.\d+)?)', lower_msg)
     if not budget_match and ("budget" in lower_msg or "under" in lower_msg):
         budget_match = re.search(r'\b(\d+(?:\.\d+)?)\b', lower_msg)
@@ -442,12 +489,12 @@ def process_chat_message(
                     + f"\n\n**Total Bundle Price:** **₹{running_total:.2f}** (Savings: ₹{max(0.0, budget_val - running_total):.2f} within your limit).\n\n"
                     "Would you like me to add these books to your cart?"
                 )
-                extra_chips = [f"Add {b.name} to Cart" for b in selected_bundle[:3]]
+                extra_chips = ["Add Bundle to Cart"] + [f"Add {b.name} to Cart" for b in selected_bundle[:3]]
                 return (reply, None, None, cart, build_actions(extra_chips))
         except Exception as e:
             logger.warning(f"Budget parsing failed: {e}")
 
-    # 3. GRACEFUL FAILURE PIVOT FOR UNSTOCKED GENRES / VIBES (e.g. "funny books", "comedy", "romance")
+    # 4. GRACEFUL FAILURE PIVOT FOR UNSTOCKED GENRES / VIBES (e.g. "funny books", "comedy", "romance")
     unstocked_genres = ["funny", "comedy", "romance", "romantic", "cooking", "cookbook", "manga", "poetry"]
     if any(ug in lower_msg for ug in unstocked_genres) and not has_buy_intent and not has_remove_intent:
         matched_ug = next(ug for ug in unstocked_genres if ug in lower_msg)
@@ -472,7 +519,7 @@ def process_chat_message(
         extra_chips = [f"Add {b.name} to Cart" for b in pivot_books]
         return (reply, "GRACEFUL_FAILURE", None, cart, build_actions(extra_chips))
 
-    # 4. MULTI-BOOK RECOMMENDATIONS VIA search_catalog_by_theme (e.g., "Recommend 3 good Self-Growth books")
+    # 5. MULTI-BOOK RECOMMENDATIONS VIA search_catalog_by_theme (e.g., "Recommend 3 good Self-Growth books")
     if any(k in lower_msg for k in ["recommend", "recommendation", "top books", "best books", "trending", "show me", "give me", "list"]):
         num_match = re.search(r'\b(\d+)\b', lower_msg)
         requested_limit = int(num_match.group(1)) if num_match and 1 <= int(num_match.group(1)) <= 10 else 3
@@ -495,10 +542,10 @@ def process_chat_message(
                 + "\n\n".join(b_lines)
                 + f"\n\nEach of these titles is highly acclaimed by readers. Which one would you like me to add to your cart?"
             )
-            extra_chips = [f"Add {b.name} to Cart" for b in matched_books]
+            extra_chips = ["Add All Recommended Books to Cart"] + [f"Add {b.name} to Cart" for b in matched_books]
             return (reply, None, None, cart, build_actions(extra_chips))
 
-    # 5. OUT-OF-CONTEXT POLITE PIVOT (coding, weather, politics, recipes, random queries)
+    # 6. OUT-OF-CONTEXT POLITE PIVOT (coding, weather, politics, recipes, random queries)
     out_of_context_topics = {
         "weather": ("science & environment", ["Dune", "Clean Code"]),
         "coding": ("tech & programming", ["Clean Code", "Designing Data-Intensive Applications"]),
@@ -532,7 +579,7 @@ def process_chat_message(
         extra_chips = [f"Add {b.name} to Cart" for b in pivot_books]
         return (reply, None, None, cart, build_actions(extra_chips))
 
-    # 6. DETERMINISTIC PRE-PROCESSING ROUTER: MULTI-INTENT & SWAP PATTERNS WITH CONTINUOUS UPSELL
+    # 7. DETERMINISTIC PRE-PROCESSING ROUTER: MULTI-INTENT & SWAP PATTERNS WITH CONTINUOUS UPSELL
     if has_swap_intent or (has_remove_intent and has_buy_intent):
         remove_target = ""
         add_target = ""
@@ -581,7 +628,6 @@ def process_chat_message(
                 amount_involved=round(added_prod.price * 0.9, 2)
             )
 
-        # CONTINUOUS UPSELL ENGINE: Find complementary book for cross-selling
         companion = find_cross_sell_companion(db, added_prod, cart) if added_prod else None
         extra_chip = [f"Add {companion.name} to Cart"] if companion else []
 
@@ -603,7 +649,7 @@ def process_chat_message(
             )
             return (reply, "CART_UPDATED", None, cart, build_actions(extra_chip))
 
-    # 7. GRACEFUL FAILURE SCENARIO (Machiavelli 1st Edition Signed)
+    # 8. GRACEFUL FAILURE SCENARIO (Machiavelli 1st Edition Signed)
     if "prince" in lower_msg or "machiavelli" in lower_msg or "1st edition" in lower_msg:
         machiavelli_item = db.query(Product).filter(Product.name.ilike("%Machiavelli%")).first()
         item_stock = machiavelli_item.stock_quantity if machiavelli_item else 0
@@ -620,7 +666,7 @@ def process_chat_message(
         actions = build_actions(["Add Atomic Habits to Cart"])
         return (OUT_OF_STOCK_REPLY, "GRACEFUL_FAILURE", None, cart, actions)
 
-    # 8. EXPLICIT REMOVAL INTENT ONLY
+    # 9. EXPLICIT REMOVAL INTENT ONLY
     if has_remove_intent:
         if "only want" in lower_msg:
             keep_book_name = "atomic" if "atomic" in lower_msg else ("power" if "power" in lower_msg else "")
@@ -656,7 +702,7 @@ def process_chat_message(
                 reply = "I couldn't find that item in your current cart."
                 return (reply, None, None, cart, build_actions())
 
-    # 9. HARD GATING TEST SCENARIO: DISCOUNT > 15% REQUESTED
+    # 10. HARD GATING TEST SCENARIO: DISCOUNT > 15% REQUESTED
     if "20%" in lower_msg or "20 percent" in lower_msg or "30%" in lower_msg or "25%" in lower_msg:
         target_book = find_product_fuzzy(db, lower_msg) or db.query(Product).filter(Product.name.ilike("%Atomic Habits%")).first()
         base_price = target_book.price if target_book else 16.99
@@ -693,11 +739,11 @@ def process_chat_message(
         )
         return (reply, "CART_UPDATED", None, cart, build_actions(extra_chip))
 
-    # 10. EXPLICIT CHECKOUT CONFIRMATION -> INVOKE generate_checkout TOOL
+    # 11. EXPLICIT CHECKOUT CONFIRMATION -> INVOKE generate_checkout TOOL
     if "checkout" in lower_msg or "pay" in lower_msg or "buy now" in lower_msg or "ready to order" in lower_msg or "generate checkout" in lower_msg:
         return generate_checkout(cart=cart, db=db)
 
-    # 11. INFORMATIONAL INQUIRIES (DO NOT ADD TO CART)
+    # 12. INFORMATIONAL INQUIRIES (DO NOT ADD TO CART)
     if "know more" in lower_msg or "tell me more" in lower_msg or "more about" in lower_msg or "tell me about" in lower_msg or "what is" in lower_msg or "summary" in lower_msg:
         prod = find_product_fuzzy(db, lower_msg) or db.query(Product).filter(Product.name.ilike("%Deep Work%")).first()
         
@@ -710,19 +756,18 @@ def process_chat_message(
             actions = build_actions([f"Add {prod.name} to Cart"])
             return (desc, None, None, cart, actions)
 
-    # 12. SPECIFIC BOOK ENQUIRY / ADDITION WITH CONTINUOUS UPSELL
+    # 13. SPECIFIC BOOK ENQUIRY / ADDITION WITH CONTINUOUS UPSELL
     prod = find_product_fuzzy(db, lower_msg)
     if prod:
         if has_buy_intent:
-            cart = add_to_cart(cart, prod, discount_pct=10.0)
+            cart = add_to_cart(cart, prod, discount_pct=0.0)
             log_ai_action(
                 db=db,
                 action_type="ITEM_ADDED_TO_CART",
-                ai_reasoning=f"PHYSICAL TOOL EXECUTED: Added requested book '{prod.name}' to cart. Bounded 10% discount applied.",
-                amount_involved=round(prod.price * 0.9, 2)
+                ai_reasoning=f"PHYSICAL TOOL EXECUTED: Added requested book '{prod.name}' to cart.",
+                amount_involved=round(prod.price, 2)
             )
 
-            # CONTINUOUS UPSELL ENGINE: Find complementary book for cross-selling
             companion = find_cross_sell_companion(db, prod, cart)
             comp_name = companion.name if companion else "Deep Work"
             extra_chip = [f"Add {comp_name} to Cart"]
@@ -741,7 +786,7 @@ def process_chat_message(
             actions = build_actions([f"Add {prod.name} to Cart"])
             return (reply, None, None, cart, actions)
 
-    # 13. GENERAL RECOMMENDATION / AUTHOR ENQUIRIES
+    # 14. GENERAL RECOMMENDATION / AUTHOR ENQUIRIES
     authors_list = ["stephen king", "james clear", "robert greene", "cal newport", "andy weir", "martin kleppmann"]
     matched_author = next((a for a in authors_list if a in lower_msg), None)
     if matched_author:
@@ -770,19 +815,23 @@ def process_chat_message(
             extra_chips = [f"Add {b.name} to Cart" for b in genre_books]
             return (reply, None, None, cart, build_actions(extra_chips))
 
-    # 14. GENERAL GEMINI LLM FALLBACK WITH STRICT CONTINUOUS UPSELL RULE
+    # 15. GENERAL GEMINI LLM FALLBACK WITH CONVERSATIONAL MEMORY & UPSELL RULES
     if GEMINI_API_KEY:
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
             prompt = (
                 "You are Agent Bookworm, an AI assistant for an Agentic Bookstore with a 200-book catalog.\n"
                 "STRICT BOUNDED RULES:\n"
-                "1. Continuous Cross-Sell / Upsell Rule: Whenever you successfully execute add_to_cart, you MUST immediately execute a cross-sell strategy. Look at the book just added, find 1 highly relevant complementary book in the catalog, and pitch it in 1-2 sentences. You MUST include a dynamic action chip to add this complementary book to the cart.\n"
-                "2. If a user asks for general recommendations, a specific vibe/genre, or asks for multiple books (e.g. 'Recommend 3 Self-Growth books'), you MUST call search_catalog_by_theme tool and output a pitch for EVERY book returned by the tool, not just the first one. Include action chips for each book.\n"
-                "3. Use find_product_fuzzy ONLY for single-item lookups (add_to_cart, remove_from_cart).\n"
-                "4. Empathetic Problem Solving: If a user states a personal emotion or life situation ('I am poor', 'I am sad'), validate with brief empathy and pitch 2-3 relevant books.\n"
-                "5. NEVER output raw cart contents, subtotals, or bulleted lists of cart items in your text response.\n"
-                "6. Always format currency using the Rupee symbol ₹.\n\n"
+                "1. CRITICAL RULE (RECOMMEND VS ADD TO CART): If a user asks for recommendations, suggestions, or searches, you MUST ONLY list the books. DO NOT execute the add_to_cart tool unless the user explicitly asks you to 'add', 'buy', 'purchase', or says 'yes' to a specific pitch.\n"
+                "2. REAL INVENTORY ONLY: You must ONLY recommend books that actually exist in your Agent-Readable Catalog. Do not invent or hallucinate book titles.\n"
+                "3. DO NOT APPLY UNPROMPTED DISCOUNTS: DO NOT apply discounts unless the user specifically negotiates for one, or if you are using it strategically to fit a requested budget. Default all cart additions to a 0% discount.\n"
+                "4. Conversational Memory & Affirmations: If you just recommended a book or a budget bundle, and the user replies with an affirmative follow-up (e.g., 'yes', 'sure', 'add them', 'do it'), you MUST assume they want the items you just pitched. Immediately execute the add_to_cart tool for the exact book or books you just recommended. DO NOT fall back to the default greeting.\n"
+                "5. CRITICAL CROSS-SELL RULE: When recommending a companion read, you MUST NEVER recommend the exact same book the user just added to the cart. You MUST NEVER recommend a book that is already present in the user's cart. You must actively cross-reference the current cart state and select a DIFFERENT, highly relevant book from the catalog.\n"
+                "6. If a user asks for general recommendations, a specific vibe/genre, or asks for multiple books (e.g. 'Recommend 3 Self-Growth books'), you MUST call search_catalog_by_theme tool and output a pitch for EVERY book returned by the tool, not just the first one. Include action chips for each book.\n"
+                "7. Use find_product_fuzzy ONLY for single-item lookups (add_to_cart, remove_from_cart).\n"
+                "8. Empathetic Problem Solving: If a user states a personal emotion or life situation ('I am poor', 'I am sad'), validate with brief empathy and pitch 2-3 relevant books.\n"
+                "9. NEVER output raw cart contents, subtotals, or bulleted lists of cart items in your text response.\n"
+                "10. Always format currency using the Rupee symbol ₹.\n\n"
                 f"Active Cart Items: {[i['name'] for i in cart]}\n"
                 f"User Message: {message}"
             )

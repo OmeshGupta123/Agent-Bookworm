@@ -25,11 +25,21 @@ export const createOrder = async (productId, discountPercentage = 0, crossSellId
   return res.data;
 };
 
-export const verifyPayment = async (razorpayOrderId, razorpayPaymentId, razorpaySignature) => {
+export const verifyPayment = async (razorpayOrderId, razorpayPaymentId, razorpaySignature, items = []) => {
   const res = await axios.post(`${API_BASE}/orders/verify`, {
     razorpay_order_id: razorpayOrderId,
     razorpay_payment_id: razorpayPaymentId,
-    razorpay_signature: razorpaySignature
+    razorpay_signature: razorpaySignature,
+    items: items
+  });
+  return res.data;
+};
+
+export const reportPaymentFailure = async (razorpayOrderId, reason, items = []) => {
+  const res = await axios.post(`${API_BASE}/orders/fail`, {
+    razorpay_order_id: razorpayOrderId,
+    reason,
+    items
   });
   return res.data;
 };

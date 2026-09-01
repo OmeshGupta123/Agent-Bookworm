@@ -38,9 +38,10 @@ class AIAuditLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
     action_type = Column(String(100), nullable=False)
-    # Action types: INTENT_DETECTED, DISCOUNT_APPLIED, DISCOUNT_REJECTED, CHECKOUT_GENERATED, STOCK_CHECK_FAILED, CHECKOUT_BLOCKED, PAYMENT_VERIFIED
+    # Action types: CHECKOUT_GENERATED, CHECKOUT_BLOCKED, STOCK_CHECK_FAILED, PAYMENT_VERIFIED, PAYMENT_FAILED
     ai_reasoning = Column(Text, nullable=False)
     amount_involved = Column(Float, nullable=False, default=0.0)
+    log_metadata = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     # Relationship

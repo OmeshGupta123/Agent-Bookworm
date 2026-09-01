@@ -6,7 +6,8 @@ from app.models import Product, Order
 from app.config import MAX_DISCOUNT_PERCENT, RAZORPAY_KEY_ID
 from app.schemas import (
     OrderCreateRequest, CheckoutWidgetData,
-    VerifyPaymentRequest, VerifyPaymentResponse
+    VerifyPaymentRequest, VerifyPaymentResponse,
+    FailPaymentRequest
 )
 from app.services.audit_service import log_ai_action
 from app.services.razorpay_service import create_razorpay_order_sdk, verify_razorpay_signature
@@ -32,7 +33,12 @@ def create_order(req: OrderCreateRequest, db: Session = Depends(get_db)):
             db=db,
             action_type="STOCK_CHECK_FAILED",
             ai_reasoning=f"STOCK FAILURE DETECTED: Order creation for '{product.name}' blocked (Stock = {product.stock_quantity}).",
-            amount_involved=product.price
+            amount_involved=0.0,
+            log_metadata={
+                "status": "Stock Exception",
+                "purchased_items": [product.name],
+                "failure_reason": f"Item '{product.name}' is currently out of stock."
+            }
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -44,7 +50,12 @@ def create_order(req: OrderCreateRequest, db: Session = Depends(get_db)):
             db=db,
             action_type="CHECKOUT_BLOCKED",
             ai_reasoning=f"HARD GATING ENFORCEMENT: Order rejected. Discount {req.discount_percentage}% exceeds cap of {MAX_DISCOUNT_PERCENT}%.",
-            amount_involved=product.price
+            amount_involved=0.0,
+            log_metadata={
+                "status": "Blocked",
+                "purchased_items": [product.name],
+                "failure_reason": f"Requested discount ({req.discount_percentage}%) exceeds maximum allowed cap of {MAX_DISCOUNT_PERCENT}%."
+            }
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -67,7 +78,12 @@ def create_order(req: OrderCreateRequest, db: Session = Depends(get_db)):
             db=db,
             action_type="CHECKOUT_BLOCKED",
             ai_reasoning=f"HARD GATING ENFORCEMENT: Order rejected. Total amount is {final_amount} (must be > 0).",
-            amount_involved=final_amount
+            amount_involved=0.0,
+            log_metadata={
+                "status": "Blocked",
+                "purchased_items": [product.name],
+                "failure_reason": "Order total amount must be greater than 0."
+            }
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -92,14 +108,6 @@ def create_order(req: OrderCreateRequest, db: Session = Depends(get_db)):
     db.add(db_order)
     db.commit()
     db.refresh(db_order)
-
-    log_ai_action(
-        db=db,
-        order_id=db_order.id,
-        action_type="CHECKOUT_GENERATED",
-        ai_reasoning=f"CHECKOUT CREATED: Generated Razorpay order '{rzp_order_id}' for '{product.name}'. Payable: ${final_amount}.",
-        amount_involved=final_amount
-    )
 
     items = [
         {
@@ -154,6 +162,10 @@ def verify_payment(req: VerifyPaymentRequest, db: Session = Depends(get_db)):
         razorpay_signature=req.razorpay_signature
     )
 
+    purchased_items_list = req.items if req.items else (
+        [order.product.name] if order and order.product else ["Book Order"]
+    )
+
     if is_valid:
         order.status = "paid"
         db.commit()
@@ -162,11 +174,15 @@ def verify_payment(req: VerifyPaymentRequest, db: Session = Depends(get_db)):
             db=db,
             order_id=order.id,
             action_type="PAYMENT_VERIFIED",
-            ai_reasoning=(
-                f"PAYMENT VERIFIED SUCCESSFULLY: Razorpay HMAC payment signature validated for Order ID '{order.razorpay_order_id}' "
-                f"with Payment ID '{req.razorpay_payment_id}'. Database order status updated to PAID."
-            ),
-            amount_involved=order.total_amount
+            ai_reasoning=f"PAYMENT VERIFIED: Razorpay payment signature validated for Order ID '{order.razorpay_order_id}'.",
+            amount_involved=order.total_amount,
+            log_metadata={
+                "status": "Verified",
+                "purchased_items": purchased_items_list,
+                "order_id": req.razorpay_order_id,
+                "payment_id": req.razorpay_payment_id,
+                "failure_reason": None
+            }
         )
         return VerifyPaymentResponse(
             status="success",
@@ -181,13 +197,49 @@ def verify_payment(req: VerifyPaymentRequest, db: Session = Depends(get_db)):
             db=db,
             order_id=order.id,
             action_type="PAYMENT_FAILED",
-            ai_reasoning=(
-                f"PAYMENT VERIFICATION FAILED: Invalid Razorpay signature for Order ID '{order.razorpay_order_id}'. "
-                "Order status updated to FAILED."
-            ),
-            amount_involved=order.total_amount
+            ai_reasoning=f"PAYMENT FAILED: Invalid Razorpay HMAC signature for Order ID '{order.razorpay_order_id}'.",
+            amount_involved=0.0,
+            log_metadata={
+                "status": "Failed",
+                "purchased_items": purchased_items_list,
+                "order_id": req.razorpay_order_id,
+                "payment_id": req.razorpay_payment_id,
+                "failure_reason": "Invalid Razorpay payment signature verification."
+            }
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid payment signature."
         )
+
+@router.post("/fail")
+def fail_payment(req: FailPaymentRequest, db: Session = Depends(get_db)):
+    """
+    POST /api/orders/fail
+    Logs a PAYMENT_FAILED action to ai_audit_logs when user cancels checkout modal or payment fails.
+    """
+    order = db.query(Order).filter(Order.razorpay_order_id == req.razorpay_order_id).first()
+    if order:
+        order.status = "failed"
+        db.commit()
+
+    items_list = req.items if req.items else (
+        [order.product.name] if order and order.product else ["Book Order"]
+    )
+    fail_reason = req.reason or "User cancelled checkout modal or payment declined."
+
+    log_ai_action(
+        db=db,
+        order_id=order.id if order else None,
+        action_type="PAYMENT_FAILED",
+        ai_reasoning=f"PAYMENT FAILED: {fail_reason} for Order '{req.razorpay_order_id}'.",
+        amount_involved=0.0,
+        log_metadata={
+            "status": "Failed",
+            "purchased_items": items_list,
+            "order_id": req.razorpay_order_id,
+            "payment_id": None,
+            "failure_reason": fail_reason
+        }
+    )
+    return {"status": "recorded", "message": "Payment failure/cancellation logged to audit trail."}
