@@ -1,7 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database import Base
+
+def utc_now():
+    return datetime.now(timezone.utc)
 
 class Product(Base):
     __tablename__ = "products"
@@ -23,10 +26,15 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     razorpay_order_id = Column(String(255), unique=True, index=True, nullable=False)
     total_amount = Column(Float, nullable=False)
-    status = Column(String(50), nullable=False, default="pending")  # pending, paid, failed
-    created_at = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(50), nullable=False, default="pending")  # pending, paid, failed, PENDING_APPROVAL
+    created_at = Column(DateTime, default=utc_now)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
     discount_percentage = Column(Float, default=0.0)
+
+    # Optional fields for enterprise checkout drafting & auditing
+    pre_discount_total = Column(Float, default=0.0, nullable=True)
+    payment_link = Column(String, nullable=True)
+    buyer_email = Column(String, nullable=True)
 
     # Relationships
     product = relationship("Product")
@@ -42,7 +50,7 @@ class AIAuditLog(Base):
     ai_reasoning = Column(Text, nullable=False)
     amount_involved = Column(Float, nullable=False, default=0.0)
     log_metadata = Column(Text, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now)
 
     # Relationship
     order = relationship("Order", back_populates="audit_logs")

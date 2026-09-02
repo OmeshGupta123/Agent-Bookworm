@@ -74,10 +74,17 @@ Demonstrated via a specific mock scenario:
 ### 1. Clone & Environment Setup
 Ensure your `.env` file is present in the root directory:
 ```env
-RAZORPAY_KEY_ID=rzp_test_TV4evSxVgchq96
-RAZORPAY_KEY_SECRET=U7A0FYCOv59mycrB6IE4KCOn
+# Use your own Razorpay *test-mode* credentials. Never commit real keys.
+RAZORPAY_KEY_ID=rzp_test_your_key_id
+RAZORPAY_KEY_SECRET=your_test_key_secret
 DATABASE_URL=sqlite:///./agenticpay.db
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=openai/gpt-oss-120b
 GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-3.6-flash
+MAX_DISCOUNT_PERCENT=15
+# Optional maintenance credential. Do not expose this value to the browser.
+AUDIT_CLEAR_TOKEN=replace-with-a-long-random-value
 ```
 
 ### 2. Automated One-Command Setup
@@ -96,8 +103,22 @@ chmod +x setup.sh
 What the setup script performs:
 1. Installs Python dependencies (`pip install -r backend/requirements.txt`).
 2. Installs React frontend packages (`cd frontend && npm install`).
-3. Initializes database tables & populates the **200-Book Catalog** (`/api/seed`).
+3. Initializes database tables & populates the **200-Book Catalog** (`/api/products/seed`).
 4. Launches **FastAPI Server** (`http://127.0.0.1:8000`) and **Vite React App** (`http://localhost:5173`) concurrently!
+
+### 3. Verify before demoing
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+cd ..\frontend
+.\node_modules\.bin\vite.cmd build
+```
+
+Razorpay orders are never faked: if the test-mode credentials or payment gateway are unavailable, checkout remains blocked, the cart stays intact, and the failure is recorded in the audit trail.
+
+Audit history is intentionally persistent. The destructive maintenance endpoint requires `AUDIT_CLEAR_TOKEN` in the `X-Audit-Clear-Token` request header; the buyer and merchant browser UI cannot clear it.
 
 ---
 
@@ -106,13 +127,15 @@ What the setup script performs:
 Once running, navigate to **`http://localhost:5173`** and click the demo prompt chips:
 
 1. **Test 15% Cap Gating**: Click *"Can you give me a 20% discount on Atomic Habits?"*  
-   *Result:* AI rejects 20%, caps discount at 15.0%, logs `CHECKOUT_BLOCKED` to the audit trail, and renders a 15% checkout card.
+   *Result:* AI rejects 20%, applies the bounded 15.0% offer to the cart, and logs the cap decision in the audit trail. A Razorpay order is created only when the buyer explicitly proceeds to checkout.
 2. **Test Graceful Failure**: Click *"I want to buy The Prince 1st Edition Signed"*  
-   *Result:* Backend catches stock count = 0, logs `STOCK_CHECK_FAILED`, and AI offers Atomic Habits at a 5% discount.
+   *Result:* Backend catches stock count = 0, logs `STOCK_CHECK_FAILED`, and AI offers an in-stock alternative without changing the cart until the buyer confirms.
 3. **Test Payment Verification**: Click *"Pay with Razorpay"* on any generated checkout card  
    *Result:* Launches Razorpay Test Mode modal. On success, `/api/orders/verify` validates the HMAC signature and logs `PAYMENT_VERIFIED`.
 4. **Merchant Audit Inspector**: Switch to **Merchant Audit Dashboard** tab  
    *Result:* View live KPI counters and expand any row to read the exact Ai reasoning trace.
+
+If Gemini is rate-limited or temporarily unavailable, common shopping actions—catalog discovery, author lookup, budget curation, cart changes, discount caps and stock checks—continue against the live catalog. The assistant never fabricates a payment order or successful payment.
 
 ---
 

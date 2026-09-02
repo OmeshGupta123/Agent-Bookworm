@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, RefreshCw, ChevronDown, ChevronUp, Lock, AlertTriangle, Eye, Layers, XCircle } from 'lucide-react';
-import { fetchAuditLogs } from '../api';
+import { ShieldCheck, RefreshCw, ChevronDown, ChevronUp, Lock, AlertTriangle, Eye, Layers, XCircle, Trash2 } from 'lucide-react';
+import { fetchAuditLogs, clearAuditLogs } from '../api';
 
 const NAVIGATION_SECTIONS = [
   { id: 'ALL', label: 'AI Financial Audit Trail', icon: Layers },
@@ -28,15 +28,47 @@ export default function MerchantDashboardView() {
     }
   };
 
+  const handleClearLogs = async () => {
+    setLoading(true);
+    try {
+      await clearAuditLogs();
+      setLogs([]);
+    } catch (err) {
+      console.error('Failed to clear audit trail:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    loadAuditLogs();
+    let isMounted = true;
+    fetchAuditLogs()
+      .then((data) => {
+        if (isMounted) {
+          setLogs(data || []);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load audit logs:', err);
+        if (isMounted) setLoading(false);
+      });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const toggleExpand = (id) => {
     setExpandedLogId(expandedLogId === id ? null : id);
   };
 
-  const filteredLogs = logs.filter((log) => {
+  // Only showcase the 4 specified financial & safety actions:
+  // Verified Payments, Failed Payments, Gated Cap Blocks, Stock Exceptions — nothing else
+  const financialLogs = logs.filter((log) =>
+    ['PAYMENT_VERIFIED', 'PAYMENT_FAILED', 'CHECKOUT_BLOCKED', 'STOCK_CHECK_FAILED'].includes(log.action_type)
+  );
+
+  const filteredLogs = financialLogs.filter((log) => {
     if (activeSection === 'ALL') return true;
     return log.action_type === activeSection;
   });
@@ -56,8 +88,8 @@ export default function MerchantDashboardView() {
                 const Icon = sec.icon;
                 const isActive = activeSection === sec.id;
                 const count = sec.id === 'ALL'
-                  ? logs.length
-                  : logs.filter((l) => l.action_type === sec.id).length;
+                  ? financialLogs.length
+                  : financialLogs.filter((l) => l.action_type === sec.id).length;
 
                 return (
                   <button
@@ -110,13 +142,25 @@ export default function MerchantDashboardView() {
               </p>
             </div>
 
-            <button
-              onClick={loadAuditLogs}
-              className="flex items-center space-x-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-700 transition-colors cursor-pointer self-start sm:self-auto"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              <span>Refresh Trail</span>
-            </button>
+            <div className="flex items-center space-x-2 self-start sm:self-auto">
+              <button
+                onClick={handleClearLogs}
+                disabled={loading || logs.length === 0}
+                className="flex items-center space-x-1.5 bg-zinc-800/80 hover:bg-red-950/50 hover:text-red-300 text-zinc-300 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-700/80 hover:border-red-800/60 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Clear audit trail for a fresh start"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clear Trail</span>
+              </button>
+
+              <button
+                onClick={loadAuditLogs}
+                className="flex items-center space-x-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold px-3 py-2 rounded-lg border border-zinc-700 transition-colors cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                <span>Refresh Trail</span>
+              </button>
+            </div>
           </div>
 
           {/* AI Financial Audit Trail Table Stream */}
@@ -145,7 +189,7 @@ export default function MerchantDashboardView() {
                   if (log.log_metadata) {
                     try {
                       meta = typeof log.log_metadata === 'string' ? JSON.parse(log.log_metadata) : log.log_metadata;
-                    } catch (e) {
+                    } catch {
                       meta = null;
                     }
                   }
@@ -163,7 +207,7 @@ export default function MerchantDashboardView() {
                   const failureReason = meta?.failure_reason || (
                     log.action_type === 'CHECKOUT_BLOCKED' ? 'Requested discount exceeds maximum allowed cap of 15%.' :
                     log.action_type === 'STOCK_CHECK_FAILED' ? 'Requested item is out of stock.' :
-                    log.action_type === 'PAYMENT_FAILED' ? 'Invalid Razorpay payment signature or checkout cancelled.' : null
+                    log.action_type === 'PAYMENT_FAILED' ? (log.ai_reasoning || 'Payment transaction failed or user cancelled checkout.') : null
                   );
 
                   return (
@@ -181,7 +225,9 @@ export default function MerchantDashboardView() {
                                 ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
                                 : log.action_type === 'CHECKOUT_BLOCKED'
                                 ? 'bg-red-950/80 text-red-300 border-red-800/60'
-                                : log.action_type === 'STOCK_CHECK_FAILED' || log.action_type === 'PAYMENT_FAILED'
+                                : log.action_type === 'PAYMENT_FAILED'
+                                ? 'bg-rose-950/80 text-rose-300 border-rose-800/60'
+                                : log.action_type === 'STOCK_CHECK_FAILED'
                                 ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
                                 : 'bg-blue-950/80 text-blue-300 border-blue-800/60'
                             }`}>
@@ -233,7 +279,7 @@ export default function MerchantDashboardView() {
                               <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                                 statusLabel === 'Verified' ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700/50' :
                                 statusLabel === 'Blocked' ? 'bg-red-900/60 text-red-300 border border-red-700/50' :
-                                statusLabel === 'Failed' ? 'bg-amber-900/60 text-amber-300 border border-amber-700/50' :
+                                statusLabel === 'Failed' ? 'bg-rose-900/60 text-rose-300 border border-rose-700/50' :
                                 statusLabel === 'Stock Exception' ? 'bg-amber-900/60 text-amber-300 border border-amber-700/50' :
                                 'bg-blue-900/60 text-blue-300 border border-blue-700/50'
                               }`}>
@@ -276,7 +322,7 @@ export default function MerchantDashboardView() {
                             {failureReason && (
                               <div className="border-t border-zinc-800/80 pt-2.5 space-y-1">
                                 <span className="text-zinc-400 text-xs font-medium block">Reason:</span>
-                                <p className="text-amber-400 bg-amber-950/40 border border-amber-900/40 p-2.5 rounded-lg text-xs leading-relaxed">
+                                <p className="text-rose-400 bg-rose-950/40 border border-rose-900/40 p-2.5 rounded-lg text-xs leading-relaxed">
                                   {failureReason}
                                 </p>
                               </div>

@@ -1,37 +1,50 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.database import engine, Base, SessionLocal, get_db
-from app.models import Product
+from app.config import MAX_DISCOUNT_PERCENT
+from app.models import Product, Order, AIAuditLog
 from app.api import products, orders, audit, chat
 from app.api.products import seed_products
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create/recreate database tables cleanly with CASCADE
-try:
-    with engine.connect() as conn:
-        conn.execute(Base.metadata.schema and text("") or text("DROP TABLE IF EXISTS ai_audit_logs, orders, products CASCADE;"))
-        conn.commit()
-except Exception as e:
-    logger.warning(f"Note on dropping legacy tables: {e}")
-
+# Recreate tables idempotently
 Base.metadata.create_all(bind=engine)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Initializing Agent Bookworm database tables and seeding catalog...")
+    db = SessionLocal()
+    try:
+        # Purge existing audit logs and orders on new server start so the Merchant Dashboard starts fresh
+        deleted_logs = db.query(AIAuditLog).delete()
+        deleted_orders = db.query(Order).delete()
+        db.commit()
+        logger.info(f"Merchant Audit Dashboard initialized clean: purged {deleted_logs} old logs and {deleted_orders} old orders.")
+        seed_products(db)
+    except Exception as e:
+        logger.error(f"Error initializing database on startup: {e}")
+        db.rollback()
+    finally:
+        db.close()
+    yield
 
 app = FastAPI(
     title="Agent Bookworm API",
     description="Agentic Commerce Backend with Bounded Discounts, Razorpay Checkouts, Audit Logs, and Graceful Inventory Handling.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS setup for React frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,24 +55,13 @@ app.include_router(products.router)
 app.include_router(orders.router)
 app.include_router(audit.router)
 
-@app.on_event("startup")
-def startup_event():
-    logger.info("Initializing Agent Bookworm database tables and seeding catalog...")
-    db = SessionLocal()
-    try:
-        seed_products(db)
-    except Exception as e:
-        logger.error(f"Error seeding database on startup: {e}")
-    finally:
-        db.close()
-
 @app.get("/")
 def root():
     return {
         "app": "Agent Bookworm API",
         "status": "online",
         "track": "AI Growth & Agentic Commerce (Razorpay Buildathon)",
-        "max_discount_cap": "15%"
+        "max_discount_cap": f"{MAX_DISCOUNT_PERCENT:.0f}%"
     }
 
 @app.get("/api/agent-catalog.json")
@@ -93,7 +95,7 @@ def get_agent_catalog(db: Session = Depends(get_db)):
         "store_name": "Agent Bookworm Bookstore",
         "protocol": "Agent-to-Agent Commerce v1.0",
         "checkout_capability": True,
-        "bounded_discount_cap": "15%",
+        "bounded_discount_cap": f"{MAX_DISCOUNT_PERCENT:.0f}%",
         "total_products": len(catalog_data),
         "catalog": catalog_data
     }

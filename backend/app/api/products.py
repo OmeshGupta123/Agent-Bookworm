@@ -230,6 +230,13 @@ def get_products(db: Session = Depends(get_db)):
         products = db.query(Product).all()
     return products
 
+@router.get("/{product_id}", response_model=ProductResponse)
+def get_product_by_id(product_id: int, db: Session = Depends(get_db)):
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product
+
 @router.post("/seed", response_model=List[ProductResponse])
 def seed_products(db: Session = Depends(get_db)):
     all_books = generate_200_books()

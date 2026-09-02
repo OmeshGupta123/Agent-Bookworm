@@ -2,8 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
 # Distribution / packaging
@@ -46,12 +44,17 @@ venv.bak/
 .env
 .env.*
 *.env
+!.env.example
 
 # Databases & Local SQLite files
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 agenticpay.db
+agenticpay_test.db
 
 # Logs
 *.log

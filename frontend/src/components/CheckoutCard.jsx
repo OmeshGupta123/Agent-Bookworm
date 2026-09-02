@@ -1,8 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { CreditCard, CheckCircle2, AlertCircle, ShoppingBag, ShieldCheck, Tag } from 'lucide-react';
+import { CreditCard, CheckCircle2, AlertCircle, ShoppingBag, ShieldCheck, Tag, XCircle } from 'lucide-react';
 import { verifyPayment, reportPaymentFailure } from '../api';
-
-const RAZORPAY_KEY = import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_your_key";
 
 export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
   const [loading, setLoading] = useState(false);
@@ -28,43 +26,37 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
     { name: "Atomic Habits", final_price: final_amount, price: original_total, discount_percentage: discount_percentage }
   ];
 
-  const calculatedOriginalTotal = original_total || cartItemList.reduce((sum, i) => sum + (i.price || i.final_price || 0), 0);
-  const calculatedFinalAmount = final_amount || cartItemList.reduce((sum, i) => sum + (i.final_price || 0), 0);
-  const calculatedTotalDiscount = total_discount || Math.max(0, calculatedOriginalTotal - calculatedFinalAmount);
+  const calculatedOriginalTotal = original_total !== undefined && original_total !== null
+    ? original_total
+    : cartItemList.reduce((sum, i) => sum + (i.price || i.final_price || 0) * (i.quantity || 1), 0);
+
+  const calculatedFinalAmount = final_amount !== undefined && final_amount !== null
+    ? final_amount
+    : cartItemList.reduce((sum, i) => sum + (i.final_price || i.price || 0) * (i.quantity || 1), 0);
+
+  const calculatedTotalDiscount = total_discount !== undefined && total_discount !== null
+    ? total_discount
+    : Math.max(0, calculatedOriginalTotal - calculatedFinalAmount);
   const itemNames = cartItemList.map((i) => i.name);
 
-  const handleSimulatedPayment = async () => {
-    setLoading(true);
-    setPaymentStatus('idle');
-    setErrorMessage('');
-
-    try {
-      const mockPaymentId = `pay_sim_${Date.now()}`;
-      const mockSignature = `sig_sim_${Date.now()}`;
-
-      const verifyRes = await verifyPayment(
-        razorpay_order_id,
-        mockPaymentId,
-        mockSignature,
-        itemNames
-      );
-
-      setPaymentStatus('success');
-      if (onPaymentSuccess) {
-        onPaymentSuccess(verifyRes);
+  const logFailure = async (reason) => {
+    if (!hasLoggedFailure.current) {
+      hasLoggedFailure.current = true;
+      try {
+        await reportPaymentFailure(razorpay_order_id, reason, itemNames);
+      } catch (err) {
+        console.error('Failed to report payment failure:', err);
       }
-    } catch (err) {
-      console.error('Simulated payment error:', err);
-      setPaymentStatus('error');
-      const errDetail = err?.response?.data?.detail || 'Razorpay payment verification failed.';
-      setErrorMessage(errDetail);
-      if (!hasLoggedFailure.current) {
-        hasLoggedFailure.current = true;
-        reportPaymentFailure(razorpay_order_id, errDetail, itemNames).catch(() => {});
-      }
-    } finally {
-      setLoading(false);
     }
+  };
+
+  const handleSimulateFailure = async () => {
+    setLoading(true);
+    setPaymentStatus('error');
+    const reason = "Payment declined: Insufficient funds / Simulated card decline.";
+    setErrorMessage(reason);
+    await logFailure(reason);
+    setLoading(false);
   };
 
   const handleOpenRazorpay = () => {
@@ -73,14 +65,26 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
     setErrorMessage('');
     hasLoggedFailure.current = false;
 
+    if (!razorpay_key_id) {
+      setLoading(false);
+      setPaymentStatus('error');
+      const reason = 'Razorpay test keys are not configured. No payment was attempted.';
+      setErrorMessage(reason);
+      logFailure(reason);
+      return;
+    }
+
     if (typeof window.Razorpay === 'undefined') {
-      console.warn('Razorpay SDK not loaded. Falling back to backend payment verification handler.');
-      handleSimulatedPayment();
+      setLoading(false);
+      setPaymentStatus('error');
+      const reason = 'The Razorpay checkout script did not load. Please refresh and try again.';
+      setErrorMessage(reason);
+      logFailure(reason);
       return;
     }
 
     const options = {
-      key: razorpay_key_id || RAZORPAY_KEY,
+      key: razorpay_key_id,
       amount: Math.round(calculatedFinalAmount * 100),
       currency: currency || 'INR',
       name: 'Agent Bookworm Bookstore',
@@ -106,10 +110,7 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
           setPaymentStatus('error');
           const errDetail = err?.response?.data?.detail || 'Razorpay payment verification failed.';
           setErrorMessage(errDetail);
-          if (!hasLoggedFailure.current) {
-            hasLoggedFailure.current = true;
-            reportPaymentFailure(razorpay_order_id, errDetail, itemNames).catch(() => {});
-          }
+          await logFailure(errDetail);
         } finally {
           setLoading(false);
         }
@@ -125,9 +126,8 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
       modal: {
         ondismiss: function () {
           setLoading(false);
-          if (!hasLoggedFailure.current) {
-            hasLoggedFailure.current = true;
-            reportPaymentFailure(razorpay_order_id, "User cancelled checkout modal", itemNames).catch(() => {});
+          if (paymentStatus !== 'success') {
+            logFailure("User cancelled checkout modal");
           }
         }
       }
@@ -137,18 +137,19 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
       const rzp = new window.Razorpay(options);
       rzp.on('payment.failed', function (response) {
         setPaymentStatus('error');
-        const failMsg = response.error?.description || 'Payment transaction failed.';
+        const failMsg = response.error?.description || response.error?.reason || 'Payment transaction failed.';
         setErrorMessage(failMsg);
         setLoading(false);
-        if (!hasLoggedFailure.current) {
-          hasLoggedFailure.current = true;
-          reportPaymentFailure(razorpay_order_id, failMsg, itemNames).catch(() => {});
-        }
+        logFailure(failMsg);
       });
       rzp.open();
     } catch (e) {
       console.error('Razorpay modal open exception:', e);
-      handleSimulatedPayment();
+      setLoading(false);
+      setPaymentStatus('error');
+      const failMsg = 'Razorpay checkout could not open. No payment was attempted.';
+      setErrorMessage(failMsg);
+      logFailure(failMsg);
     }
   };
 
@@ -174,20 +175,34 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
 
       {/* Cart Items Summary */}
       <div className="space-y-2 mb-3 max-h-36 overflow-y-auto pr-1">
-        {cartItemList.map((item, idx) => (
-          <div key={idx} className="flex items-center justify-between text-xs bg-zinc-950 p-2 rounded-xl border border-zinc-800/80">
-            <div className="min-w-0 flex-1 pr-2">
-              <span className="font-medium text-white truncate block">{item.name}</span>
-              {item.author && <span className="text-[10px] text-zinc-500 block truncate">{item.author}</span>}
+        {cartItemList.map((item, idx) => {
+          const qty = item.quantity || 1;
+          const unitFinal = item.final_price || item.price || 0;
+          const lineTotal = unitFinal * qty;
+
+          return (
+            <div key={idx} className="flex items-center justify-between text-xs bg-zinc-950 p-2 rounded-xl border border-zinc-800/80">
+              <div className="min-w-0 flex-1 pr-2">
+                <span className="font-medium text-white truncate block">{item.name}</span>
+                <div className="flex items-center space-x-2 text-[10px] text-zinc-500">
+                  {item.author && <span className="truncate">{item.author}</span>}
+                  {qty > 1 && (
+                    <span className="text-zinc-400 font-mono font-medium">Qty: {qty}</span>
+                  )}
+                </div>
+              </div>
+              <div className="text-right shrink-0 font-mono">
+                <span className="font-semibold text-white">₹{lineTotal.toFixed(2)}</span>
+                {qty > 1 && (
+                  <span className="text-[10px] text-zinc-500 block font-normal">({qty} × ₹{unitFinal.toFixed(2)})</span>
+                )}
+                {item.discount_percentage > 0 && (
+                  <span className="text-[10px] text-blue-400 block">({item.discount_percentage}% OFF)</span>
+                )}
+              </div>
             </div>
-            <div className="text-right shrink-0 font-mono">
-              <span className="font-semibold text-white">₹{(item.final_price || item.price).toFixed(2)}</span>
-              {item.discount_percentage > 0 && (
-                <span className="text-[10px] text-blue-400 block">({item.discount_percentage}% OFF)</span>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Financial Breakdown */}
@@ -201,7 +216,7 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
           <div className="flex justify-between text-blue-400">
             <span className="flex items-center space-x-1">
               <Tag className="w-3 h-3" />
-              <span>Bounded Discount ({discount_percentage}% Cap):</span>
+              <span>Bounded Discount:</span>
             </span>
             <span>-₹{calculatedTotalDiscount.toFixed(2)}</span>
           </div>
@@ -243,6 +258,16 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
           >
             <CreditCard className="w-4 h-4" />
             <span>{loading ? 'Processing Razorpay...' : `Pay ₹${calculatedFinalAmount.toFixed(2)} with Razorpay`}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSimulateFailure}
+            disabled={loading}
+            className="w-full py-1.5 bg-zinc-950 hover:bg-red-950/40 hover:text-red-300 text-zinc-400 font-medium text-[11px] rounded-lg transition-colors flex items-center justify-center space-x-1.5 border border-zinc-800/80 hover:border-red-900/50 cursor-pointer disabled:opacity-40"
+          >
+            <XCircle className="w-3.5 h-3.5 text-red-400" />
+            <span>Simulate Payment Failure (Test Gating)</span>
           </button>
         </div>
       )}

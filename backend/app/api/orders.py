@@ -10,7 +10,11 @@ from app.schemas import (
     FailPaymentRequest
 )
 from app.services.audit_service import log_ai_action
-from app.services.razorpay_service import create_razorpay_order_sdk, verify_razorpay_signature
+from app.services.razorpay_service import (
+    RazorpayUnavailableError,
+    create_razorpay_order_sdk,
+    verify_razorpay_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +94,25 @@ def create_order(req: OrderCreateRequest, db: Session = Depends(get_db)):
             detail="Cart total amount must be greater than 0."
         )
 
-    rzp_order_id = create_razorpay_order_sdk(
-        amount_in_inr=final_amount,
-        notes={
-            "product_name": product.name,
-            "discount_percentage": str(req.discount_percentage)
-        }
-    )
+    try:
+        rzp_order_id = create_razorpay_order_sdk(
+            amount_in_inr=final_amount,
+            notes={
+                "product_name": product.name,
+                "discount_percentage": str(req.discount_percentage)
+            }
+        )
+    except RazorpayUnavailableError as exc:
+        log_ai_action(
+            db=db,
+            action_type="PAYMENT_FAILED",
+            ai_reasoning=f"Checkout was not created because Razorpay was unavailable: {exc}",
+            amount_involved=final_amount,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment gateway is temporarily unavailable. No charge or order was created.",
+        ) from exc
 
     db_order = Order(
         razorpay_order_id=rzp_order_id,
@@ -219,6 +235,12 @@ def fail_payment(req: FailPaymentRequest, db: Session = Depends(get_db)):
     Logs a PAYMENT_FAILED action to ai_audit_logs when user cancels checkout modal or payment fails.
     """
     order = db.query(Order).filter(Order.razorpay_order_id == req.razorpay_order_id).first()
+    if order and order.status == "paid":
+        return {
+            "status": "acknowledged",
+            "message": "Order is already paid. Late client-side failure event ignored.",
+        }
+
     if order:
         order.status = "failed"
         db.commit()
@@ -227,13 +249,14 @@ def fail_payment(req: FailPaymentRequest, db: Session = Depends(get_db)):
         [order.product.name] if order and order.product else ["Book Order"]
     )
     fail_reason = req.reason or "User cancelled checkout modal or payment declined."
+    amount = order.total_amount if order else 0.0
 
     log_ai_action(
         db=db,
         order_id=order.id if order else None,
         action_type="PAYMENT_FAILED",
         ai_reasoning=f"PAYMENT FAILED: {fail_reason} for Order '{req.razorpay_order_id}'.",
-        amount_involved=0.0,
+        amount_involved=amount,
         log_metadata={
             "status": "Failed",
             "purchased_items": items_list,

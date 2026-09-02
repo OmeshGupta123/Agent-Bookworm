@@ -1,48 +1,113 @@
-# Environment & Secrets
+# =================================================================
+# Environment & Secrets (Never commit credentials)
+# =================================================================
 .env
 .env.*
 *.env
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
 
+# =================================================================
 # Databases & SQLite
+# =================================================================
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 agenticpay.db
+agenticpay_test.db
 backend/agenticpay.db
+backend/agenticpay_test.db
 
-# Python & Virtual Environments
+# =================================================================
+# Python & Bytecode
+# =================================================================
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
+*/*/*/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# =================================================================
+# Python Virtual Environments
+# =================================================================
 .venv/
 venv/
 env/
 ENV/
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.pytest_cache/
-.coverage
-htmlcov/
+env.bak/
+venv.bak/
 
+# =================================================================
+# Testing & Code Quality
+# =================================================================
+.pytest_cache/
+*/.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# =================================================================
 # Node & Frontend
+# =================================================================
 node_modules/
 frontend/node_modules/
 dist/
 dist-ssr/
 frontend/dist/
 .output/
+.parcel-cache/
+.next/
+*.local
 
+# =================================================================
 # Logs
+# =================================================================
 *.log
 logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
 
-# IDE & System Files
+# =================================================================
+# IDE & Operating System Files
+# =================================================================
 .vscode/
+!.vscode/extensions.json
 .idea/
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 *.swp
 *.swo
+*~

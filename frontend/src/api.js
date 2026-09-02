@@ -56,3 +56,8 @@ export const fetchAuditLogs = async () => {
   const res = await axios.get(`${API_BASE}/audit-logs`);
   return res.data;
 };
+
+export const clearAuditLogs = async () => {
+  const res = await axios.post(`${API_BASE}/audit-logs/clear`);
+  return res.data;
+};

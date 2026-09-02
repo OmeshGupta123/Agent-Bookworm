@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas import ChatRequest, ChatResponse
-from app.services.ai_agent import process_chat_message
+from app.agent.runner import run_agent
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
         )
 
     try:
-        reply_text, action_type, widget_data, updated_cart, suggested_actions = process_chat_message(
+        reply_text, action_type, widget_data, updated_cart, suggested_actions = run_agent(
             db=db,
             message=req.message,
             conversation_history=req.conversation_history,
@@ -55,4 +55,14 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
         )
     except Exception as e:
         logger.error(f"Chat processing error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Chat processing failed: {str(e)}")
+        # A provider or parsing failure should never strand a shopper behind a
+        # raw 500 page. Their locally-held cart is echoed back unchanged and the
+        # UI gets a clear retry message instead.
+        return ChatResponse(
+            reply="I hit a temporary issue while processing that. Your cart is unchanged—please try again in a moment.",
+            action_type="AGENT_UNAVAILABLE",
+            checkout_widget=None,
+            conversation_history=req.conversation_history or [],
+            cart=req.cart or [],
+            suggested_actions=["Show Cart"] if req.cart else [],
+        )

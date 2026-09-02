@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 class ProductBase(BaseModel):
     name: str
@@ -14,9 +14,7 @@ class ProductBase(BaseModel):
 
 class ProductResponse(ProductBase):
     id: int
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class OrderResponse(BaseModel):
     id: int
@@ -26,9 +24,7 @@ class OrderResponse(BaseModel):
     created_at: datetime
     product_id: Optional[int] = None
     discount_percentage: float = 0.0
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ChatRequest(BaseModel):
     message: str
@@ -83,6 +79,4 @@ class AIAuditLogResponse(BaseModel):
     amount_involved: float
     log_metadata: Optional[str] = None
     timestamp: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

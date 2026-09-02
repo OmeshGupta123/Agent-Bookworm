@@ -1,11 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, User, Bot, Info, ShoppingCart, Trash2, CreditCard, ArrowRight, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { sendChatMessage } from '../api';
 import CheckoutCard from './CheckoutCard';
 
+function formatMessageContent(content) {
+  if (!content) return '';
+  // Split mashed markdown tables across lines so GFM can parse them
+  let formatted = content.replace(/\|\s*\|\s*([^|\n]+)\s*\|/g, '|\n| $1 |');
+  formatted = formatted.replace(/\|\s*\|([-:\s|]+)\|/g, '|\n|$1|');
+  return formatted;
+}
+
 const DEMO_PROMPTS = [
   "Recommend 3 good Self-Growth books.",
+  "Tell me more about Atomic Habits",
   "I like Stephen King. What else has he written?",
   "Can I get a 20% discount on Atomic Habits?",
   "I want to buy The Prince 1st Edition Signed"
@@ -39,12 +49,12 @@ function DynamicActionChips({ actions, onSend, disabled }) {
   );
 }
 
-export default function BuyerChatView({ products }) {
+export default function BuyerChatView({ products: _products } = {}) {
   const [messages, setMessages] = useState([
     {
       id: 'init-1',
       role: 'assistant',
-      content: "Hello! Welcome to Agent Bookworm Bookstore. I am your AI Commerce Assistant for our 200-book collection. I can negotiate bounded discounts (up to 15%), recommend companion reads, manage your shopping cart, and generate instant Razorpay checkouts directly in this chat. How can I help you today?",
+      content: "Hello! Welcome to Agent Bookworm Bookstore. I am your AI Commerce Assistant for our 200-book collection. I can recommend companion reads, manage your shopping cart, and generate instant Razorpay checkouts directly in this chat. How can I help you today?",
       actionType: null,
       widget: null,
       suggestedActions: ["Recommend 3 good Self-Growth books."]
@@ -58,6 +68,7 @@ export default function BuyerChatView({ products }) {
 
   const messagesEndRef = useRef(null);
   const cartPopoverRef = useRef(null);
+  const messageCounter = useRef(1);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -86,8 +97,9 @@ export default function BuyerChatView({ products }) {
 
     setIsCartOpen(false);
 
+    const nextId = messageCounter.current++;
     const userMsg = {
-      id: `user-${Date.now()}`,
+      id: `user-${nextId}`,
       role: 'user',
       content: text
     };
@@ -109,7 +121,7 @@ export default function BuyerChatView({ products }) {
       }
 
       const aiMsg = {
-        id: `ai-${Date.now()}`,
+        id: `ai-${nextId}`,
         role: 'assistant',
         content: response.reply,
         actionType: response.action_type,
@@ -121,7 +133,7 @@ export default function BuyerChatView({ products }) {
     } catch (err) {
       console.error('Chat error:', err);
       const errorMsg = {
-        id: `err-${Date.now()}`,
+        id: `err-${nextId}`,
         role: 'assistant',
         content: "Sorry, I encountered a connection issue with the backend server. Please make sure the API server is running."
       };
@@ -131,11 +143,12 @@ export default function BuyerChatView({ products }) {
     }
   };
 
-  const handlePaymentSuccess = (verifyResponse) => {
+  const handlePaymentSuccess = () => {
     setCart([]);
     setIsCartOpen(false);
+    const nextId = messageCounter.current++;
     const successMsg = {
-      id: `sys-paid-${Date.now()}`,
+      id: `sys-paid-${nextId}`,
       role: 'assistant',
       content: "Payment verified successfully! Thank you for your purchase. Your order has been logged in our database and the Merchant Audit Dashboard.",
       actionType: 'PAYMENT_VERIFIED',
@@ -200,17 +213,29 @@ export default function BuyerChatView({ products }) {
                   }`}
                 >
                   {/* Clean Formatted Markdown Rendering */}
-                  <div className="prose prose-invert prose-xs max-w-none text-zinc-100 font-sans">
+                  <div className="prose prose-invert prose-xs max-w-none text-zinc-100 font-sans space-y-2">
                     <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
                       components={{
-                        p: ({ node, ...props }) => <p className="mb-1.5 last:mb-0 leading-relaxed" {...props} />,
-                        strong: ({ node, ...props }) => <strong className="font-semibold text-white" {...props} />,
-                        em: ({ node, ...props }) => <em className="italic text-zinc-200" {...props} />,
-                        ul: ({ node, ...props }) => <ul className="list-disc pl-4 space-y-1 my-1.5" {...props} />,
-                        li: ({ node, ...props }) => <li className="text-zinc-200" {...props} />
+                        p: (props) => <p className="mb-2 last:mb-0 leading-relaxed" {...props} />,
+                        strong: (props) => <strong className="font-semibold text-white" {...props} />,
+                        em: (props) => <em className="italic text-zinc-200" {...props} />,
+                        ul: (props) => <ul className="list-disc pl-5 space-y-1.5 my-2" {...props} />,
+                        ol: (props) => <ol className="list-decimal pl-5 space-y-1.5 my-2" {...props} />,
+                        li: (props) => <li className="text-zinc-200 leading-snug" {...props} />,
+                        table: (props) => (
+                          <div className="my-3 overflow-x-auto rounded-xl border border-zinc-800 shadow-md">
+                            <table className="min-w-full divide-y divide-zinc-800 text-xs text-left" {...props} />
+                          </div>
+                        ),
+                        thead: (props) => <thead className="bg-zinc-800/80 text-zinc-200 font-semibold" {...props} />,
+                        tbody: (props) => <tbody className="divide-y divide-zinc-800/60 bg-zinc-950/40" {...props} />,
+                        tr: (props) => <tr className="hover:bg-zinc-800/30 transition-colors" {...props} />,
+                        th: (props) => <th className="px-3 py-2 text-zinc-200 font-semibold" {...props} />,
+                        td: (props) => <td className="px-3 py-2 text-zinc-300" {...props} />
                       }}
                     >
-                      {msg.content}
+                      {formatMessageContent(msg.content)}
                     </ReactMarkdown>
                   </div>
 
