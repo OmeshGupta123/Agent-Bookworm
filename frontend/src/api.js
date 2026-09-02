@@ -10,10 +10,16 @@ export const fetchProducts = async () => {
 };
 
 export const sendChatMessage = async (message, conversationHistory = [], cart = []) => {
+  const formattedCart = (cart || []).map((item) => ({
+    ...item,
+    quantity: item.quantity || 1,
+    price: item.price !== undefined ? item.price : (item.final_price || 0),
+    final_price: item.final_price !== undefined ? item.final_price : (item.price || 0)
+  }));
   const res = await axios.post(`${API_BASE}/chat`, {
     message,
     conversation_history: conversationHistory,
-    cart: cart
+    cart: formattedCart
   });
   return res.data;
 };

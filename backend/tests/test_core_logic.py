@@ -284,3 +284,47 @@ def test_dynamic_discount_negotiation_engine():
         assert "Which book" in reply3 or "specify" in reply3.lower()
     finally:
         db.close()
+
+# 10. Real-Time Cart Total & Payload Processing Test
+def test_real_time_cart_total_query():
+    """Verify that passing real-time cart payload returns accurate cart total and item breakdown."""
+    from app.database import SessionLocal
+    from app.services.ai_agent import process_chat_message
+
+    db = SessionLocal()
+    try:
+        sample_cart = [
+            {
+                "product_id": 1,
+                "name": "Atomic Habits",
+                "price": 20.0,
+                "quantity": 1,
+                "discount_percentage": 10.0,
+                "final_price": 18.0
+            },
+            {
+                "product_id": 2,
+                "name": "Deep Work",
+                "price": 16.0,
+                "quantity": 2,
+                "discount_percentage": 0.0,
+                "final_price": 16.0
+            }
+        ]
+        
+        reply, action_type, widget, cart, actions = process_chat_message(
+            db=db,
+            message="What is my cart total?",
+            conversation_history=[],
+            current_cart=sample_cart
+        )
+
+        assert action_type == "CART_SUMMARY"
+        # Total calculation: (18.0 * 1) + (16.0 * 2) = 50.00
+        assert "50.00" in reply
+        assert "3 item(s)" in reply
+        assert "Atomic Habits" in reply
+        assert "Deep Work" in reply
+    finally:
+        db.close()
+

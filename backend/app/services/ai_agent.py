@@ -196,13 +196,13 @@ def is_in_cart(cart: List[Dict[str, Any]], product_name: str) -> bool:
             return True
     return False
 
-def add_to_cart(cart: List[Dict[str, Any]], product: Product, discount_pct: float = 0.0) -> List[Dict[str, Any]]:
-    """Adds a product to cart if not present, applying capped discount."""
+def add_to_cart(cart: List[Dict[str, Any]], product: Product, discount_pct: float = 0.0, quantity: int = 1) -> List[Dict[str, Any]]:
+    """Adds a product to cart if not present, applying capped discount, or increments quantity."""
     capped_discount = min(discount_pct, MAX_DISCOUNT_PERCENT)
     disc_amount = round(product.price * (capped_discount / 100.0), 2)
     final_price = round(product.price - disc_amount, 2)
 
-    existing = next((item for item in cart if item.get("product_id") == product.id), None)
+    existing = next((item for item in cart if item.get("product_id") == product.id or item.get("name", "").lower() == product.name.lower()), None)
     if not existing:
         cart.append({
             "product_id": product.id,
@@ -210,11 +210,17 @@ def add_to_cart(cart: List[Dict[str, Any]], product: Product, discount_pct: floa
             "author": product.author,
             "format": product.format,
             "price": product.price,
+            "quantity": quantity,
             "discount_percentage": capped_discount,
             "discount_amount": disc_amount,
             "final_price": final_price,
             "image_url": product.image_url
         })
+    else:
+        existing["quantity"] = existing.get("quantity", 1) + quantity
+        existing["discount_percentage"] = capped_discount
+        existing["discount_amount"] = disc_amount
+        existing["final_price"] = final_price
     return cart
 
 def remove_from_cart(cart: List[Dict[str, Any]], identifier: str) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -316,9 +322,9 @@ def generate_checkout(cart: List[Dict[str, Any]], db: Session) -> Tuple[str, str
         if default_book:
             cart = add_to_cart(cart, default_book, discount_pct=10.0)
 
-    original_total = sum(item["price"] for item in cart)
-    final_amount = sum(item["final_price"] for item in cart)
-    total_discount = round(original_total - final_amount, 2)
+    original_total = round(sum(item.get("price", 0.0) * item.get("quantity", 1) for item in cart), 2)
+    final_amount = round(sum(item.get("final_price", item.get("price", 0.0)) * item.get("quantity", 1) for item in cart), 2)
+    total_discount = round(max(0.0, original_total - final_amount), 2)
     avg_discount_pct = round((total_discount / original_total * 100.0), 1) if original_total > 0 else 0.0
 
     first_prod_id = cart[0]["product_id"] if cart else 1
@@ -397,6 +403,7 @@ def process_chat_message(
     has_buy_intent = (not is_discount_query) and any(k in lower_msg for k in ["buy", "add", "purchase", "get", "order", "want to buy"])
     has_remove_intent = any(k in lower_msg for k in ["remove", "delete", "only want", "dont want", "don't want"])
     has_swap_intent = any(k in lower_msg for k in ["replace", "swap", "exchange", "change", "trade"])
+    has_discount_intent = is_discount_query
 
     # 1. CONVERSATIONAL MEMORY & AFFIRMATION FOLLOW-UPS ("yes", "sure", "add them", "do it", "ok", "add bundle", "add all")
     affirmative_terms = ["yes", "sure", "add them", "add it", "do it", "ok", "okay", "add all", "add both", "please add", "add bundle", "add recommended", "yep", "yeah"]
@@ -523,6 +530,49 @@ def process_chat_message(
         )
         extra_chips = [f"Add {b.name} to Cart" for b in pivot_books]
         return (reply, "GRACEFUL_FAILURE", None, cart, build_actions(extra_chips))
+
+    # 4.5. REAL-TIME CART SUMMARY / TOTAL QUERIES
+    is_cart_total_query = any(k in lower_msg for k in [
+        "cart total", "total cart", "cart sum", "cart amount", "cart value",
+        "total in my cart", "total price", "how much is my cart", "what is my cart total",
+        "what's my cart total", "what is the cart total", "how much does my cart cost",
+        "view cart", "show cart", "cart summary", "total in cart", "my cart total", "cart status"
+    ])
+
+    if is_cart_total_query and not has_buy_intent and not has_remove_intent and not has_swap_intent and not has_discount_intent:
+        if not cart:
+            reply = "Your shopping cart is currently empty! Ask me for book recommendations to add items to your cart."
+            return (reply, "CART_EMPTY", None, cart, build_actions())
+
+        cart_items_detail = []
+        calc_original = 0.0
+        calc_final = 0.0
+        total_items_count = 0
+
+        for item in cart:
+            qty = item.get("quantity", 1)
+            total_items_count += qty
+            p_orig = item.get("price", 0.0)
+            p_final = item.get("final_price", p_orig)
+            disc_pct = item.get("discount_percentage", 0.0)
+            
+            calc_original += p_orig * qty
+            calc_final += p_final * qty
+
+            disc_str = f" ({disc_pct:.0f}% OFF)" if disc_pct > 0 else ""
+            qty_str = f" (x{qty})" if qty > 1 else ""
+            cart_items_detail.append(f"• **{item.get('name')}**{qty_str} - ₹{(p_final * qty):.2f}{disc_str}")
+
+        total_savings = max(0.0, calc_original - calc_final)
+        savings_text = f"\n\n**Total Savings:** ₹{total_savings:.2f}" if total_savings > 0 else ""
+
+        reply = (
+            f"Your current cart total is **₹{calc_final:.2f}** for **{total_items_count} item(s)**:\n\n"
+            + "\n".join(cart_items_detail)
+            + f"{savings_text}\n\n"
+            "Would you like to proceed to checkout or add more books to your cart?"
+        )
+        return (reply, "CART_SUMMARY", None, cart, build_actions(["Proceed to Checkout"]))
 
     # 5. MULTI-BOOK RECOMMENDATIONS VIA search_catalog_by_theme (e.g., "Recommend 3 good Self-Growth books")
     if any(k in lower_msg for k in ["recommend", "recommendation", "top books", "best books", "trending", "show me", "give me", "list"]):
@@ -858,20 +908,35 @@ def process_chat_message(
     if GEMINI_API_KEY:
         try:
             client = genai.Client(api_key=GEMINI_API_KEY)
+
+            if cart:
+                cart_breakdown = []
+                total_cart_val = 0.0
+                for item in cart:
+                    q = item.get("quantity", 1)
+                    fp = item.get("final_price", item.get("price", 0.0))
+                    item_sum = fp * q
+                    total_cart_val += item_sum
+                    disc = item.get("discount_percentage", 0)
+                    cart_breakdown.append(f"{item.get('name')} (Qty: {q}, Unit Price: ₹{fp:.2f}, Discount: {disc}%, Total: ₹{item_sum:.2f})")
+                cart_status_info = f"Active Cart Items: {'; '.join(cart_breakdown)} | Real-Time Total Cart Amount: ₹{total_cart_val:.2f}"
+            else:
+                cart_status_info = "Active Cart Items: Empty (Total: ₹0.00)"
+
             prompt = (
                 "You are Agent Bookworm, an AI assistant for an Agentic Bookstore with a 200-book catalog.\n"
                 "STRICT BOUNDED RULES:\n"
                 "1. CRITICAL RULE (RECOMMEND VS ADD TO CART): If a user asks for recommendations, suggestions, or searches, you MUST ONLY list the books. DO NOT execute the add_to_cart tool unless the user explicitly asks you to 'add', 'buy', 'purchase', or says 'yes' to a specific pitch.\n"
                 "2. REAL INVENTORY ONLY: You must ONLY recommend books that actually exist in your Agent-Readable Catalog. Do not invent or hallucinate book titles.\n"
-                "3. DO NOT APPLY UNPROMPTED DISCOUNTS: DO NOT apply discounts unless the user specifically negotiates for one, or if you are using it strategically to fit a requested budget. Default all cart additions to a 0% discount.\n"
-                "4. Conversational Memory & Affirmations: If you just recommended a book or a budget bundle, and the user replies with an affirmative follow-up (e.g., 'yes', 'sure', 'add them', 'do it'), you MUST assume they want the items you just pitched. Immediately execute the add_to_cart tool for the exact book or books you just recommended. DO NOT fall back to the default greeting.\n"
-                "5. CRITICAL CROSS-SELL RULE: When recommending a companion read, you MUST NEVER recommend the exact same book the user just added to the cart. You MUST NEVER recommend a book that is already present in the user's cart. You must actively cross-reference the current cart state and select a DIFFERENT, highly relevant book from the catalog.\n"
-                "6. If a user asks for general recommendations, a specific vibe/genre, or asks for multiple books (e.g. 'Recommend 3 Self-Growth books'), you MUST call search_catalog_by_theme tool and output a pitch for EVERY book returned by the tool, not just the first one. Include action chips for each book.\n"
-                "7. Use find_product_fuzzy ONLY for single-item lookups (add_to_cart, remove_from_cart).\n"
-                "8. Empathetic Problem Solving: If a user states a personal emotion or life situation ('I am poor', 'I am sad'), validate with brief empathy and pitch 2-3 relevant books.\n"
-                "9. NEVER output raw cart contents, subtotals, or bulleted lists of cart items in your text response.\n"
+                "3. ACCURATE CART TOTAL: Use the exact Real-Time Total Cart Amount and Active Cart Items provided below. NEVER invent or hallucinate a cart total (such as ₹500).\n"
+                "4. DO NOT APPLY UNPROMPTED DISCOUNTS: DO NOT apply discounts unless the user specifically negotiates for one, or if you are using it strategically to fit a requested budget. Default all cart additions to a 0% discount.\n"
+                "5. Conversational Memory & Affirmations: If you just recommended a book or a budget bundle, and the user replies with an affirmative follow-up (e.g., 'yes', 'sure', 'add them', 'do it'), you MUST assume they want the items you just pitched. Immediately execute the add_to_cart tool for the exact book or books you just recommended. DO NOT fall back to the default greeting.\n"
+                "6. CRITICAL CROSS-SELL RULE: When recommending a companion read, you MUST NEVER recommend the exact same book the user just added to the cart. You MUST NEVER recommend a book that is already present in the user's cart. You must actively cross-reference the current cart state and select a DIFFERENT, highly relevant book from the catalog.\n"
+                "7. If a user asks for general recommendations, a specific vibe/genre, or asks for multiple books (e.g. 'Recommend 3 Self-Growth books'), you MUST call search_catalog_by_theme tool and output a pitch for EVERY book returned by the tool, not just the first one. Include action chips for each book.\n"
+                "8. Use find_product_fuzzy ONLY for single-item lookups (add_to_cart, remove_from_cart).\n"
+                "9. Empathetic Problem Solving: If a user states a personal emotion or life situation ('I am poor', 'I am sad'), validate with brief empathy and pitch 2-3 relevant books.\n"
                 "10. Always format currency using the Rupee symbol ₹.\n\n"
-                f"Active Cart Items: {[i['name'] for i in cart]}\n"
+                f"{cart_status_info}\n"
                 f"User Message: {message}"
             )
             response = client.models.generate_content(

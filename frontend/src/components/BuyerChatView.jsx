@@ -152,7 +152,7 @@ export default function BuyerChatView({ products }) {
     handleSend(`remove ${bookName}`);
   };
 
-  const cartTotal = cart.reduce((sum, item) => sum + (item.final_price || 0), 0);
+  const cartTotal = cart.reduce((sum, item) => sum + ((item.final_price !== undefined ? item.final_price : (item.price || 0)) * (item.quantity || 1)), 0);
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] max-w-3xl mx-auto px-4 py-4 font-sans text-zinc-100">
