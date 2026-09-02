@@ -112,7 +112,7 @@ Once running, navigate to **`http://localhost:5173`** and click the demo prompt 
 3. **Test Payment Verification**: Click *"Pay with Razorpay"* on any generated checkout card  
    *Result:* Launches Razorpay Test Mode modal. On success, `/api/orders/verify` validates the HMAC signature and logs `PAYMENT_VERIFIED`.
 4. **Merchant Audit Inspector**: Switch to **Merchant Audit Dashboard** tab  
-   *Result:* View live KPI counters and expand any row to read the exact AI reasoning trace.
+   *Result:* View live KPI counters and expand any row to read the exact Ai reasoning trace.
 
 ---
 
