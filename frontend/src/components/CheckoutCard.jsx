@@ -2,6 +2,8 @@ import React, { useState, useRef } from 'react';
 import { CreditCard, CheckCircle2, AlertCircle, ShoppingBag, ShieldCheck, Tag } from 'lucide-react';
 import { verifyPayment, reportPaymentFailure } from '../api';
 
+const RAZORPAY_KEY = import.meta.env.VITE_RAZORPAY_KEY_ID || "rzp_test_your_key";
+
 export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
   const [loading, setLoading] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState('idle'); // 'idle' | 'success' | 'error'
@@ -78,7 +80,7 @@ export default function CheckoutCard({ widgetData, onPaymentSuccess }) {
     }
 
     const options = {
-      key: razorpay_key_id || 'rzp_test_TV4evSxVgchq96',
+      key: razorpay_key_id || RAZORPAY_KEY,
       amount: Math.round(calculatedFinalAmount * 100),
       currency: currency || 'INR',
       name: 'Agent Bookworm Bookstore',
