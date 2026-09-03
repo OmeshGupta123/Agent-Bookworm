@@ -155,8 +155,16 @@ def check_affirmation(
 
     names = [", ".join(f"**{p.name}**" for p in added_prods)]
     discount_text = f" with the promised {offered_discount:.0f}% discount" if offered_discount else ""
-    reply = f"I've added {names[0]} to your cart{discount_text}."
-    return _result(reply=reply, cart=cart, action_type="CART_UPDATED")
+    comp_text, comp_chips = get_companion_recommendations(db, cart, reference_genre=added_prods[-1].genre if added_prods else "", count=2)
+    comp_block = ""
+    if comp_text:
+        comp_block = (
+            f"\n\n🎁 **Special Companion Offers (2 Related Books):**\n\n"
+            f"{comp_text}\n\n"
+            "Would you like me to add either to your cart with a special 10% bundle discount?"
+        )
+    reply = f"I've added {names[0]} to your cart{discount_text}.{comp_block}"
+    return _result(reply=reply, cart=cart, action_type="CART_UPDATED", extra_chips=comp_chips)
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +276,56 @@ def check_swap_intent(
     return None
 
 
+def get_companion_recommendations(
+    db: Session,
+    cart: list[dict[str, Any]],
+    reference_genre: str = "",
+    count: int = 2,
+) -> tuple[str, list[str]]:
+    """
+    Finds `count` related in-stock books that are NOT present in the cart,
+    and formats them with unique, interesting, witty pitches.
+    Returns (formatted_markdown_lines, extra_chips).
+    """
+    query = db.query(Product).filter(Product.stock_quantity > 0)
+    all_in_stock = query.all()
+
+    candidates: list[Product] = []
+
+    # Prioritize same genre if available
+    if reference_genre:
+        for p in all_in_stock:
+            if p.genre and reference_genre.lower() in p.genre.lower():
+                if not is_in_cart(cart, p.name) and p not in candidates:
+                    candidates.append(p)
+
+    # Add other distinct in-stock books not in cart
+    other_books = [p for p in all_in_stock if not is_in_cart(cart, p.name) and p not in candidates]
+    import random
+    random.shuffle(other_books)
+    candidates.extend(other_books)
+
+    selected = candidates[:count]
+    if not selected:
+        return "", []
+
+    book_lines = []
+    extra_chips = []
+    for b in selected:
+        pitch = generate_book_pitch(b.name, b.genre, b.author, b.description)
+        author_str = f" by {b.author}" if b.author else ""
+        book_lines.append(
+            f"- **{b.name}**{author_str} — INR {b.price:.2f} ({b.genre} · {b.format})\n"
+            f"  *{pitch}*"
+        )
+        extra_chips.append(f"Add {b.name} to Cart")
+        if len(extra_chips) < 4:
+            extra_chips.append(f"Tell me more about {b.name}")
+
+    formatted_text = "\n\n".join(book_lines)
+    return formatted_text, extra_chips
+
+
 # ---------------------------------------------------------------------------
 # Pre-Intercept 3: Direct Remove intent
 # ---------------------------------------------------------------------------
@@ -298,19 +356,27 @@ def check_direct_remove_intent(
             ai_reasoning=f"DETERMINISTIC INTENT INTERCEPT: Kept only requested book. Removed {removed_titles}.",
             amount_involved=0.0,
         )
-        reply = "Understood! I've updated your cart to keep only your requested book."
-        return _result(reply=reply, cart=cart, action_type="CART_UPDATED")
+        comp_text, comp_chips = get_companion_recommendations(db, cart, count=2)
+        comp_block = f"\n\n✨ **Here are 2 great companion reads you might love instead:**\n\n{comp_text}\n\nWould you like me to add either to your cart?" if comp_text else ""
+        reply = f"Understood! I've updated your cart to keep only your requested book.{comp_block}"
+        return _result(reply=reply, cart=cart, action_type="CART_UPDATED", extra_chips=comp_chips)
 
-    cart, removed = cart_remove(cart, lower_msg)
+    cart, removed = cart_remove(cart, lower_msg, db=db)
     if removed:
-        log_ai_action(
-            db=db,
-            action_type="ITEM_REMOVED_FROM_CART",
-            ai_reasoning=f"DETERMINISTIC INTENT INTERCEPT: Removed {removed} from cart based on user request.",
-            amount_involved=0.0,
-        )
-        reply = f"I've removed **{', '.join(removed)}** from your cart."
-        return _result(reply=reply, cart=cart, action_type="CART_UPDATED")
+        removed_str = ", ".join(f"**{r}**" for r in removed)
+        empty_note = " Your cart is now empty." if len(cart) == 0 else f" ({len(cart)} item(s) remaining in your cart)."
+
+        comp_text, comp_chips = get_companion_recommendations(db, cart, count=2)
+        comp_block = ""
+        if comp_text:
+            comp_block = (
+                f"\n\n✨ **Here are 2 great companion reads you might love instead:**\n\n"
+                f"{comp_text}\n\n"
+                "Would you like me to add either to your cart?"
+            )
+
+        reply = f"Done! I've removed {removed_str} from your cart.{empty_note}{comp_block}"
+        return _result(reply=reply, cart=cart, action_type="CART_UPDATED", extra_chips=comp_chips)
     else:
         reply = "I couldn't find that item in your current cart."
         return _result(reply=reply, cart=cart)
@@ -376,33 +442,22 @@ def check_direct_add_intent(
         amount_involved=round(target.price * (1 - offered_discount / 100), 2),
     )
 
-    bundles = analyze_and_bundle(db, cart, theme=target.genre)
-    comp_text = ""
-    extra_chips = []
-    if bundles:
-        comp = bundles[0]
-        c_name = comp["name"]
-        c_price = comp["price"]
-        c_author = comp.get("author", "")
-        c_genre = comp.get("genre", target.genre)
-        c_desc = comp.get("description", "")
-        c_pitch = generate_book_pitch(c_name, c_genre, c_author, c_desc)
-        comp_text = (
-            f"\n\n🎁 **Special Companion Offer:**\n"
-            f"- **{c_name}**" + (f" by {c_author}" if c_author else "") + f" — INR {c_price:.2f} ({c_genre})\n"
-            f"  *{c_pitch}*\n\n"
-            f"Would you like me to add **{c_name}** to your cart with a special 10% bundle discount?"
+    comp_text, comp_chips = get_companion_recommendations(db, cart, reference_genre=target.genre, count=2)
+    comp_block = ""
+    if comp_text:
+        comp_block = (
+            f"\n\n🎁 **Special Companion Offers (2 Related Books):**\n\n"
+            f"{comp_text}\n\n"
+            "Would you like me to add either of these to your cart with a special 10% bundle discount?"
         )
-        extra_chips.append(f"Add {c_name} to Cart")
-        extra_chips.append(f"Tell me more about {c_name}")
 
     reply = (
         f"I've added **{target.name}** to your cart"
         + (f" with the promised **{offered_discount:.0f}% discount**" if offered_discount else "")
         + "!\n\n"
-        f"**Why {target.name} is a Great Read:** {target.description}{comp_text}"
+        f"**Why {target.name} is a Great Read:** {target.description}{comp_block}"
     )
-    return _result(reply=reply, cart=cart, action_type="CART_UPDATED", extra_chips=extra_chips)
+    return _result(reply=reply, cart=cart, action_type="CART_UPDATED", extra_chips=comp_chips)
 
 
 

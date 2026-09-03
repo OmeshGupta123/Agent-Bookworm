@@ -116,7 +116,7 @@ export default function BuyerChatView({ products: _products } = {}) {
 
       const response = await sendChatMessage(text, historyPayload, cart);
 
-      if (response.cart) {
+      if (Array.isArray(response.cart)) {
         setCart(response.cart);
       }
 

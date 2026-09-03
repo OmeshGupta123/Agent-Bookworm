@@ -21,7 +21,7 @@ def get_groq_client() -> Groq | None:
             logger.warning("GROQ_API_KEY not set — Groq features disabled.")
             return None
         try:
-            _client = Groq(api_key=GROQ_API_KEY)
+            _client = Groq(api_key=GROQ_API_KEY, timeout=15.0)
             logger.info("Groq client initialised.")
         except Exception as exc:
             logger.error(f"Failed to initialise Groq client: {exc}")

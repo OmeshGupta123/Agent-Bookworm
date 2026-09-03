@@ -49,6 +49,7 @@ from app.agent.guardrails import (
     check_swap_intent,
     check_unstocked_genre,
     enforce_discount_cap,
+    get_companion_recommendations,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,70 +119,27 @@ def _build_system_prompt(cart: list[dict], db: Session) -> str:
             f"Savings: INR {summary['savings']:.2f}"
         )
 
-    return f"""You are Agent Bookworm, a high-converting, revenue-driven enterprise AI commerce assistant for an agentic bookstore.
+    return f"""You are Agent Bookworm, a warm, intelligent, and witty AI commerce assistant for a curated bookstore.
 
-REVENUE GROWTH PERSONA & BUNDLE STRATEGY:
-Your primary goal is to grow the merchant's cart value. After adding an item requested by the user, immediately use the `analyze_and_bundle` tool to find complementary items. Pitch these items as a personalized bundle, and proactively offer a small (e.g., 5-10%) discount on the bundle to incentivize the upsell before they ask to checkout. Always prioritize items with high stock_quantity when making these recommendations.
+CORE RULES:
+1. REAL INVENTORY ONLY: Search and recommend books strictly from the live catalog via `search_catalog`, `find_product`, `get_book_details`, or `analyze_and_bundle`. Never invent non-existent books.
+2. BOUNDED DISCOUNT: The maximum allowable merchant discount is {MAX_DISCOUNT_PERCENT:.0f}%. If asked for more, explain the cap.
+3. NO CHECKOUT HALLUCINATIONS: Never calculate payment hashes or claim a checkout order is created. Checkout is created only by the server when the buyer explicitly asks to checkout.
+4. CART STATE & TOOLS: Use tools to search the catalog, view book details, inspect cart, or modify items (only when buyer requests). Once tool results are received, immediately compose your natural reply without recursive tool calls.
 
-CORE ARCHITECTURAL RULES (Strictly Enforce):
-1. NO LLM MATH: Never calculate or quote a checkout total yourself. The server creates checkout only after the buyer explicitly asks to checkout, then recalculates catalog prices, quantities, stock and discounts before it creates a Razorpay order.
-2. BOUNDED DISCOUNT CONSTRAINT: The maximum allowable merchant discount is {MAX_DISCOUNT_PERCENT:.0f}%. If a larger discount is requested, explain the cap; never claim to have applied a larger one.
-3. HUMAN GATE FOR BULK ORDERS: If the pre-discount total exceeds INR 1,00,000, the server saves it as `PENDING_APPROVAL`. Explain that a human manager must review it before payment.
-4. GRACEFUL FAILURE: If checkout creation or a tool call returns an error (for example, a payment gateway error), do NOT break character or crash. Acknowledge the temporary issue smoothly, reassure the customer, and offer to preserve their cart.
-5. REAL INVENTORY ONLY: Search and recommend books strictly from the catalog via `search_catalog`, `find_product`, and `analyze_and_bundle`. Never hallucinate non-existent books.
-6. TOOL EMISSION RULE: Use tools for catalog search, cart changes, cart status, and bundle discovery. Checkout is performed only by the server after an explicit buyer request.
-7. EXPLAINABLE AUDIT TRAIL: Whenever you execute a cart action or checkout, you MUST provide a 1-2 sentence explanation in the ai_reasoning parameter detailing exactly why you chose that action, why you applied a specific discount, or how it benefits the merchant's revenue.
-
-SPECIFIC SCENARIO INSTRUCTIONS:
-- REVENUE UPSELL & BUNDLE DISCOVERY:
-  Whenever a user adds an item to their cart, you MUST immediately call analyze_and_bundle using the semantic theme of their purchase. Proactively pitch this bundle to the user with a customized 5-10% discount to incentivize a larger cart size before they ask to checkout.
-
-- BUDGET CURATION & EVALUATION:
-  When the user mentions a budget, spending limit, or price ceiling (e.g. "I have INR 500", "books under ₹1000", "find me a bundle under ₹400"):
-  1. Call `search_catalog` or `analyze_and_bundle` to discover available in-stock books with their live prices and genres.
-  2. Dynamically evaluate the catalog results and curate a selection or bundle of books whose combined prices fit within the user's budget.
-  3. Present the recommended books with their titles, authors, and prices. Explain why they fit the user's interests and show how the bundle respects their budget.
-  4. Offer to add the curated bundle to their cart.
-
-- SWAPS & REPLACEMENTS:
-  When the user asks to swap, replace, or exchange an item (e.g. "swap X for Y", "replace X with Y", "I don't want X, give me Y instead"):
-  1. Call `remove_from_cart` with identifier 'X' (and a clear `ai_reasoning`).
-  2. Call `find_product` with query 'Y' to get the product ID, then call `add_to_cart` to add 'Y' (with `ai_reasoning` and any applicable discount up to {MAX_DISCOUNT_PERCENT:.0f}%).
-  3. Clearly confirm the swap in your reply, describe the newly added book, and optionally suggest complementary companion reads using `analyze_and_bundle`.
-
-- EMOTIONAL & LIFE CONTEXT (Empathetic Problem Solving):
-  When the user expresses personal feelings, emotional states, life situations, or struggles (e.g. feeling sad, stressed, broke, wanting to build wealth, seeking focus, career growth):
-  1. Respond with genuine empathy, warmth, and supportive encouragement.
-  2. Call `search_catalog` or `analyze_and_bundle` with relevant themes, genres, or keywords (e.g. Self-Growth, Tech, Sci-Fi, productivity, mindset, habits, resilience).
-  3. Thoughtfully recommend 2-3 matching books, explaining specifically how each book will help address their situation or goals.
-
-- CART OPERATIONS & DISCOUNTS:
-  - Adding to cart: Call `find_product` then `add_to_cart` with `ai_reasoning`. Immediately follow up with `analyze_and_bundle` to pitch a high-margin companion bundle.
-  - Removing from cart: Call `remove_from_cart` with `ai_reasoning`.
-  - Cart status/total: Call `get_cart_summary` to provide an exact breakdown of items, totals, and savings.
-- Checkout: State that the secure checkout is created only after the buyer explicitly asks to checkout. Do not claim a payment order was created unless the server reports one.
-
-UNIQUE COMPELLING & WITTY PITCH RULE FOR ALL OFFERED BOOKS:
-1. NEVER USE MARKDOWN TABLES (do NOT use `| col1 | col2 |`).
-2. For EVERY book you offer or recommend (including companion offers when a user adds a book to cart), you MUST write a clever, witty, and unique pitch explaining why the reader will love or benefit from it. Pitches can be funny, charming, and relatable!
-3. NEVER use the words or label "💡 Pitch:" or "Pitch:". State the pitch naturally in italics right beneath the book.
-4. ALWAYS format book recommendations as clean, well-spaced Markdown bullet points:
-   - **Book Title** by Author Name — INR Price (Genre · Format)
-     *[Your unique, funny, or insightful pitch directly in italics]*
-5. Use a blank line between each book recommendation so the text is open and readable.
-6. Remind the user: "Want more info on any title? Just ask 'Tell me more about [Book Name]'!"
-
-BOOK DETAIL INQUIRIES (CRITICAL: 30-50 WORDS):
-When a user asks for more information or details about a book (e.g. "Tell me more about X", "What is X about?", "Summary of X"):
-1. Call `get_book_details` or `find_product` with the book name.
-2. Provide a concise, engaging summary of the book mentioned in about 30 TO 50 WORDS (do not write overly long essays).
-3. Include its format, genre, price, and a witty pitch.
-4. Ask if they would like you to add it to their cart.
+RESPONSE & RECOMMENDATION FORMATTING:
+- Format book recommendations as clean markdown bullet points:
+  - **Book Title** by Author Name — INR Price (Genre · Format)
+    *[A unique, witty, or insightful 1-sentence pitch in italics]*
+- Remind the user: "Want more info? Ask 'Tell me more about [Book Name]' or click to add."
+- For book inquiries: provide an engaging 30-50 word synopsis with key insights and a pitch.
+- For budget or emotional needs: curate matching in-stock titles with genuine empathy and budget awareness.
+- For cart changes: Whenever an item is added or removed, always offer 2 related in-stock books not currently in the cart with unique, witty 1-sentence pitches.
 
 LIVE CART STATE:
 {cart_info}
 
-You have access to these tools: search_catalog, find_product, get_book_details, add_to_cart, remove_from_cart, get_cart_summary, analyze_and_bundle."""
+Tools available: search_catalog, find_product, get_book_details, add_to_cart, remove_from_cart, get_cart_summary, analyze_and_bundle."""
 
 
 def _clean_response_formatting(text: str) -> str:
@@ -266,11 +224,13 @@ def _dispatch_tool(
                 ai_reasoning = tool_args.get("ai_reasoning") or tool_args.get("reasoning", "")
                 cart = cart_add(cart, prod, discount_pct=discount, quantity=quantity, ai_reasoning=ai_reasoning, db=db)
                 action_type = "CART_UPDATED"
+                comp_text, _ = get_companion_recommendations(db, cart, reference_genre=prod.genre, count=2)
                 tool_result = {
                     "success": True,
                     "added": prod.name,
                     "final_price": round(prod.price * (1 - discount / 100), 2),
                     "cart_item_count": len(cart),
+                    "mandatory_next_step": f"Always pitch these 2 complementary books not in the cart with unique pitches:\n{comp_text}",
                 }
 
     elif tool_name == "remove_from_cart":
@@ -282,10 +242,12 @@ def _dispatch_tool(
             cart, removed = cart_remove(cart, identifier, ai_reasoning=ai_reasoning, db=db)
             if removed:
                 action_type = "CART_UPDATED"
+            comp_text, _ = get_companion_recommendations(db, cart, count=2)
             tool_result = {
                 "removed": removed,
                 "cart_item_count": len(cart),
                 "success": bool(removed),
+                "mandatory_next_step": f"Always pitch these 2 alternative books not in the cart with unique pitches:\n{comp_text}",
             }
 
     elif tool_name == "get_cart_summary":
@@ -357,6 +319,43 @@ def _offline_catalog_fallback(
     )
 
 
+def _deterministic_fallback(
+    db: Session,
+    message: str,
+    lower_msg: str,
+    cart: list[dict[str, Any]],
+    conversation_history: list[dict[str, str]],
+    intent: dict[str, bool],
+) -> AgentResult:
+    """
+    Resilient safety net: When the Groq AI agent is unavailable, rate-limited,
+    times out, or cannot process a query, gracefully fall back to deterministic
+    catalog search and guardrails so the shopper receives immediate, accurate help.
+    """
+    checks = (
+        lambda: check_book_details_inquiry(db, lower_msg, cart),
+        lambda: check_swap_intent(db, lower_msg, cart, intent["swap"]),
+        lambda: check_direct_remove_intent(db, lower_msg, cart, intent["remove"], intent["swap"]),
+        lambda: check_direct_add_intent(
+            db, message, lower_msg, cart, conversation_history,
+            intent["buy"], intent["remove"], intent["swap"], intent["discount"]
+        ),
+        lambda: check_unstocked_genre(db, lower_msg, cart, intent["buy"], intent["remove"]),
+        lambda: check_budget_request(db, lower_msg, cart),
+        lambda: check_catalog_discovery(
+            db, lower_msg, cart, intent["buy"], intent["remove"], intent["swap"], intent["discount"]
+        ),
+        lambda: check_emotional_context(db, lower_msg, cart, intent["buy"], intent["remove"], intent["swap"]),
+        lambda: check_out_of_context(db, lower_msg, cart, intent["buy"], intent["remove"], bool(find_product(db, lower_msg))),
+    )
+    for check in checks:
+        result = check()
+        if result:
+            return result["reply"], result["action_type"], result["widget"], result["cart"], result["suggested_actions"]
+
+    return _offline_catalog_fallback(db, message, cart)
+
+
 # ---------------------------------------------------------------------------
 # Main agentic loop
 # ---------------------------------------------------------------------------
@@ -378,7 +377,7 @@ def run_agent(
     intent = _intent(lower_msg)
 
     # ------------------------------------------------------------------
-    # PHASE 1: Hard deterministic guardrails & Pre-Intercepts
+    # PHASE 1: Hard deterministic guardrails & Direct UI Commands
     # ------------------------------------------------------------------
 
     # 1a. Conversational affirmation (yes/sure/ok after a recommendation)
@@ -386,37 +385,18 @@ def run_agent(
     if result:
         return result["reply"], result["action_type"], result["widget"], result["cart"], result["suggested_actions"]
 
-    # 1b. Out-of-stock special item (Machiavelli) — graceful failure testing
+    # 1b. Out-of-stock special item (Machiavelli) — hard inventory gate
     result = check_out_of_stock_item(db, lower_msg, cart)
     if result:
         return result["reply"], result["action_type"], result["widget"], result["cart"], result["suggested_actions"]
 
-    # These common commerce actions are deterministic by design. This makes
-    # short follow-ups such as "remove it", "what is my total?" and a known
-    # product purchase reliable even if Gemini is rate-limited or unavailable.
-    deterministic_checks = (
-        lambda: enforce_discount_cap(db, lower_msg, cart, intent["remove"], intent["swap"]),
-        lambda: check_book_details_inquiry(db, lower_msg, cart),
-        lambda: check_cart_summary_intent(lower_msg, cart, intent["buy"], intent["remove"], intent["swap"]),
-        lambda: check_swap_intent(db, lower_msg, cart, intent["swap"]),
-        lambda: check_direct_remove_intent(db, lower_msg, cart, intent["remove"], intent["swap"]),
-        lambda: check_direct_add_intent(
-            db, message, lower_msg, cart, conversation_history,
-            intent["buy"], intent["remove"], intent["swap"], intent["discount"]
-        ),
-        lambda: check_unstocked_genre(db, lower_msg, cart, intent["buy"], intent["remove"]),
-        lambda: check_budget_request(db, lower_msg, cart),
-        lambda: check_catalog_discovery(
-            db, lower_msg, cart, intent["buy"], intent["remove"], intent["swap"], intent["discount"]
-        ),
-        lambda: check_emotional_context(db, lower_msg, cart, intent["buy"], intent["remove"], intent["swap"]),
-        lambda: check_out_of_context(db, lower_msg, cart, intent["buy"], intent["remove"], bool(find_product(db, lower_msg))),
-    )
-    for check in deterministic_checks:
-        result = check()
+    # 1c. Strict Discount Enforcement (if explicit percentage is asked, enforce 15% cap deterministically)
+    if intent["discount"]:
+        result = enforce_discount_cap(db, lower_msg, cart, intent["remove"], intent["swap"])
         if result:
             return result["reply"], result["action_type"], result["widget"], result["cart"], result["suggested_actions"]
 
+    # 1d. Checkout Initiation (hard gate: real Razorpay order creation on server)
     if intent["checkout"]:
         checkout = initiate_checkout(cart, db)
         return (
@@ -427,12 +407,39 @@ def run_agent(
             _build_actions(checkout["cart"]),
         )
 
+    # 1e. Direct Remove Intent (e.g. clicking trash icon "remove <Book>", or message "remove <Book>")
+    if intent["remove"] and not intent["swap"]:
+        result = check_direct_remove_intent(db, lower_msg, cart, intent["remove"], intent["swap"])
+        if result:
+            return result["reply"], result["action_type"], result["widget"], result["cart"], result["suggested_actions"]
+
+    # 1f. Direct UI Action Chip Clicks & Direct Add
+    is_pure_cart_query = lower_msg in {
+        "show cart", "view cart", "view my cart", "show my cart", "cart",
+        "cart total", "what is my cart total", "what's my cart total", "my cart"
+    }
+    if is_pure_cart_query:
+        result = check_cart_summary_intent(lower_msg, cart, intent["buy"], intent["remove"], intent["swap"])
+        if result:
+            return result["reply"], result["action_type"], result["widget"], result["cart"], result["suggested_actions"]
+
+    is_direct_add = (lower_msg.startswith("add ") and " to cart" in lower_msg) or (
+        intent["buy"] and not intent["remove"] and not intent["swap"] and find_product(db, lower_msg) is not None
+    )
+    if is_direct_add:
+        result = check_direct_add_intent(
+            db, message, lower_msg, cart, conversation_history,
+            intent["buy"], intent["remove"], intent["swap"], intent["discount"]
+        )
+        if result:
+            return result["reply"], result["action_type"], result["widget"], result["cart"], result["suggested_actions"]
+
     # ------------------------------------------------------------------
     # PHASE 2: Agentic Groq Loop with Function Calling
     # ------------------------------------------------------------------
     client = get_groq_client()
     if not client:
-        return _offline_catalog_fallback(db, message, cart)
+        return _deterministic_fallback(db, message, lower_msg, cart, conversation_history, intent)
 
     system_prompt = _build_system_prompt(cart, db)
 
@@ -451,16 +458,16 @@ def run_agent(
 
     final_action_type: str | None = None
     final_widget: dict | None = None
-    reply = "How can I help you with your book search today?"
+    reply = ""
 
     try:
-        # Four rounds cover the normal find -> add -> bundle -> reply sequence.
-        for _round in range(4):
+        # Up to 3 rounds covers: 1. tool dispatch (search/bundle/details) -> 2. follow-up tool or reply -> 3. final reply.
+        for _round in range(3):
             completion = client.chat.completions.create(
                 model=GROQ_MODEL,
                 messages=messages,
-                temperature=0.7,
-                max_completion_tokens=2048,
+                temperature=0.3,
+                max_completion_tokens=400,
                 tools=BOOKSTORE_TOOLS,
                 tool_choice="auto",
             )
@@ -522,9 +529,13 @@ def run_agent(
                     "content": json.dumps({"result": tool_result}),
                 })
 
+        if not reply.strip():
+            logger.warning("[Agent] Groq returned empty reply; using deterministic fallback.")
+            return _deterministic_fallback(db, message, lower_msg, cart, conversation_history, intent)
+
     except Exception as exc:
         logger.warning(f"[Agent] Groq API unavailable or rate-limited ({exc}). Falling back to deterministic catalog search.")
-        return _offline_catalog_fallback(db, message, cart)
+        return _deterministic_fallback(db, message, lower_msg, cart, conversation_history, intent)
 
     # Never infer a state or payment action from generated prose. A cart or
     # checkout can change only through a successful explicit tool call, and
@@ -543,5 +554,30 @@ def run_agent(
         )
 
     reply = _clean_response_formatting(reply)
-    return reply, final_action_type, final_widget, cart, _build_actions(cart)
+
+    # Dynamically extract mentioned titles to generate smart action chips
+    extra_chips: list[str] = []
+    bold_titles = re.findall(r'\*\*([^*]+)\*\*', reply)
+    _ignored = {
+        "cart", "total", "savings", "inr", "bookworm", "agent bookworm",
+        "proceed to checkout", "special companion offer", "discount",
+        "why read", "format", "genre", "price", "budget curator"
+    }
+    for title in bold_titles:
+        clean_t = title.strip()
+        if clean_t.lower() in _ignored or clean_t.startswith("₹") or clean_t.startswith("INR") or clean_t.isdigit():
+            continue
+        p = find_product(db, clean_t)
+        if p:
+            if not is_in_cart(cart, p.name):
+                chip_add = f"Add {p.name} to Cart"
+                if chip_add not in extra_chips:
+                    extra_chips.append(chip_add)
+            chip_info = f"Tell me more about {p.name}"
+            if chip_info not in extra_chips and len(extra_chips) < 4:
+                extra_chips.append(chip_info)
+        if len(extra_chips) >= 3:
+            break
+
+    return reply, final_action_type, final_widget, cart, _build_actions(cart, extra_chips)
 

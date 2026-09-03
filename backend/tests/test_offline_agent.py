@@ -17,8 +17,11 @@ def tearDownModule():
 class OfflineAgentDeterministicTests(unittest.TestCase):
     def setUp(self):
         self.db = SessionLocal()
+        self.patcher = patch("app.agent.runner.get_groq_client", return_value=None)
+        self.patcher.start()
 
     def tearDown(self):
+        self.patcher.stop()
         self.db.close()
 
     def test_recommend_books(self):

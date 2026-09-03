@@ -371,6 +371,13 @@ def cart_remove(
         else:
             new_cart.append(item)
 
+    # If fuzzy match didn't match a specific title but cart has exactly 1 item and request is generic remove
+    if not removed and len(cart) == 1:
+        generic_terms = {"", "it", "this", "that", "the book", "book", "item", "the item", "product", "all", "cart"}
+        if clean in generic_terms or any(k in identifier.lower() for k in ["remove it", "take it out", "delete it", "remove from cart", "remove this", "delete this", "clear cart", "take this out", "take that out"]):
+            removed.append(cart[0].get("name", ""))
+            new_cart = []
+
     if db and removed:
         explanation = ai_reasoning or f"Removed {removed} from cart based on user request."
         log_ai_action(
